@@ -38,6 +38,10 @@ select = ["E", "F", "I", "UP", "B"]
 # B008: Query/Depends in defaults is the idiomatic FastAPI pattern.
 # E501: verbose human-readable seed data (origins registry) legitimately
 # exceeds 100 cols; code files still enforce it.
+# E402: conftest must set DATABASE_URL/LLM_PROVIDER before app imports.
 "app/api/*.py" = ["B008"]
 "app/origins/seed.py" = ["E501"]
+"app/connectors/*.py" = ["E501"]
+"app/core/settings_store.py" = ["E501"]
 "tests/*.py" = ["E501"]
+"tests/conftest.py" = ["E402"]

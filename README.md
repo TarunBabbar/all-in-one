@@ -1,14 +1,15 @@
-# QA/One — Consolidated AI QA Platform
+# QA/One — AI QA Workspace
 
-Merges the 41 AI Tester Blueprint 3x hackathon projects into one best-of-breed AI QA workspace.
+One platform to run your QA flow end to end — requirement diagnosis, test
+generation, Playwright execution, failure triage, and release decisions.
 
 ## Services
 
 | Dir | Stack | Purpose |
 |---|---|---|
-| `apps/web` | Next.js 16, React 19, Tailwind v4 | Frontend + BFF |
+| `apps/web` | Next.js 16, React 19, Tailwind v4 | Hub shell + tool pages |
 | `apps/runner` | Node 22, Playwright | Sandboxed test executor worker |
-| `services/api` | Python 3.13 FastAPI | Orchestrator, engines, trust layer |
+| `services/api` | Python FastAPI | Orchestrator, engines, trust layer |
 
 ## Quick start
 
@@ -20,6 +21,19 @@ docker compose up --build
 - API: http://localhost:8000/docs
 - Runner: http://localhost:8787
 
+## Local development
+
+```bash
+# API (from services/api)
+.venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
+
+# Web (from apps/web)
+npm run dev
+```
+
+Copy `services/api/.env.example` to `services/api/.env` and fill in your
+Command Code API key + Neon Postgres URL (or run on the mock LLM + SQLite).
+
 ## Docs
 
-See `docs/architecture.md` and `docs/plan.md` for the full consolidation plan.
+See `docs/architecture.md` for the service design and engine model.

@@ -4,9 +4,9 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "QA/One — Consolidated AI QA Platform",
+  title: "QA/One — Consolidated AI QA Workspace",
   description:
-    "One workspace merging the 41 AI Tester Blueprint 3x hackathon projects: test generation, Playwright execution, failure triage, visual regression, and release gates.",
+    "AI QA workspace: test generation, Playwright execution, failure triage, visual regression, and release gates.",
 };
 
 export default function RootLayout({

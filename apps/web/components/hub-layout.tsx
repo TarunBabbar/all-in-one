@@ -1,12 +1,29 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 import { TOOLS } from "@/lib/tools";
 
-function ToolLink({ href, icon, name }: { href: string; icon: string; name: string }) {
+function ToolLink({
+  href,
+  icon,
+  name,
+  active,
+}: {
+  href: string;
+  icon: string;
+  name: string;
+  active: boolean;
+}) {
   return (
     <Link
       href={href}
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-zinc-400 transition hover:bg-white/5 hover:text-zinc-100"
+      className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
+        active
+          ? "bg-[var(--accent-soft-2)] font-semibold text-[var(--accent-strong)]"
+          : "text-[var(--ink-soft)] hover:bg-[var(--bg-hover)] hover:text-[var(--ink)]"
+      }`}
     >
       <span className="text-base leading-none">{icon}</span>
       <span className="truncate">{name}</span>
@@ -16,25 +33,30 @@ function ToolLink({ href, icon, name }: { href: string; icon: string; name: stri
 
 export default function HubLayout({
   children,
-  active,
-}: Readonly<{ children: React.ReactNode; active?: string }>) {
+}: Readonly<{ children: React.ReactNode }>) {
+  const pathname = usePathname();
+
+  const activeTool = TOOLS.find(
+    (t) => pathname === t.href || pathname.startsWith(`${t.href}/`),
+  );
+
   return (
-    <div className="flex min-h-screen bg-[#0e0f13] text-zinc-100">
+    <div className="flex min-h-screen bg-[var(--bg)] text-[var(--ink)]">
       {/* Sidebar */}
-      <aside className="flex w-60 shrink-0 flex-col border-r border-white/10 bg-[#111318]">
-        <div className="border-b border-white/10 px-4 py-4">
+      <aside className="flex w-60 shrink-0 flex-col border-r bg-[var(--bg-sunken)]">
+        <div className="border-b px-4 py-4">
           <Link href="/" className="flex items-center gap-2">
             <span className="text-lg font-extrabold tracking-tight">
-              QA<span className="text-orange-400">/One</span>
+              QA<span className="text-[var(--accent)]">/One</span>
             </span>
           </Link>
-          <p className="mt-1 text-[11px] text-zinc-500">
-            Consolidated AI QA workspace
+          <p className="mt-1 text-[11px] text-[var(--ink-faint)]">
+            AI QA workspace
           </p>
         </div>
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-3">
-          <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+          <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-faint)]">
             Tools
           </p>
           {TOOLS.map((t) => (
@@ -43,22 +65,28 @@ export default function HubLayout({
               href={t.href}
               icon={t.icon}
               name={t.name}
+              active={activeTool?.id === t.id}
             />
           ))}
         </nav>
 
-        <div className="border-t border-white/10 px-4 py-3">
-          <div className="flex items-center justify-between text-[11px] text-zinc-500">
+        <div className="border-t px-4 py-3">
+          <div className="flex items-center justify-between text-[11px] text-[var(--ink-faint)]">
             <span>LLM</span>
-            <span className="rounded bg-emerald-400/10 px-1.5 py-0.5 font-medium text-emerald-400">
-              mock
+            <span className="rounded bg-[var(--accent-soft)] px-1.5 py-0.5 font-medium text-[var(--accent-strong)]">
+              deepseek
             </span>
           </div>
           <Link
-            href="/origins"
-            className="mt-2 block text-[11px] text-zinc-600 hover:text-zinc-400"
+            href="/settings"
+            className={`mt-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
+              pathname === "/settings"
+                ? "bg-[var(--accent-soft-2)] font-semibold text-[var(--accent-strong)]"
+                : "text-[var(--ink-soft)] hover:bg-[var(--bg-hover)] hover:text-[var(--ink)]"
+            }`}
           >
-            Credits · 41 hackathon projects →
+            <span className="text-base leading-none">⚙️</span>
+            <span className="truncate">Settings</span>
           </Link>
         </div>
       </aside>

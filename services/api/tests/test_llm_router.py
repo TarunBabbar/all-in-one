@@ -36,11 +36,30 @@ async def test_mock_provider_rejects_bad_fixture() -> None:
         await router.complete_json("sys", "prompt", DemoResult)
 
 
-async def test_router_from_settings_defaults_to_mock() -> None:
+async def test_router_from_settings_mock_when_provider_mock() -> None:
     from app.core.settings import Settings
 
-    router = LLMRouter.from_settings(Settings())
+    # Explicit mock (ignore any .env LLM_PROVIDER override).
+    router = LLMRouter.from_settings(Settings(_env_file=None, llm_provider="mock"))
     assert router._provider.name == "mock"  # noqa: SLF001
+
+
+async def test_router_from_settings_commandcode_when_configured() -> None:
+    from app.core.settings import Settings
+
+    router = LLMRouter.from_settings(
+        Settings(_env_file=None, llm_provider="commandcode", cmd_api_key="test-key")
+    )
+    assert router._provider.name == "commandcode"  # noqa: SLF001
+
+
+async def test_router_from_settings_cmdc_when_configured() -> None:
+    from app.core.settings import Settings
+
+    router = LLMRouter.from_settings(
+        Settings(_env_file=None, llm_provider="cmdc")
+    )
+    assert router._provider.name == "cmdc"  # noqa: SLF001
 
 
 async def test_guarded_verdict_mock_roundtrip() -> None:

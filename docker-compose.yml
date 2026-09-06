@@ -17,11 +17,13 @@ services:
 
   api:
     build: ./services/api
+    # All api config/secrets come from services/api/.env (gitignored) so
+    # nothing sensitive is hardcoded in compose. See .env.example for keys.
+    env_file:
+      - ./services/api/.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://qahub:qahub@db:5432/qahub
-      LLM_PROVIDER: mock
+      # Overrides for in-compose networking only; everything else from .env.
       RUNNER_URL: http://runner:8787
-      CORS_ORIGINS: http://localhost:3000
     ports:
       - "8000:8000"
     volumes:

@@ -12,6 +12,13 @@ export interface ToolDef {
 
 export const TOOLS: ToolDef[] = [
   {
+    id: "intake",
+    name: "Intake",
+    description: "Normalize a requirement from any source",
+    href: "/tools/intake",
+    icon: "📥",
+  },
+  {
     id: "pipeline",
     name: "Pipeline",
     description: "Requirement to release verdict — the full QA flow",
@@ -94,5 +101,26 @@ export const TOOLS: ToolDef[] = [
     description: "Post-release missed-defect analysis",
     href: "/tools/leakage",
     icon: "🕳️",
+  },
+  {
+    id: "rag",
+    name: "RAG Explorer",
+    description: "Visible retrieve-then-generate over documents",
+    href: "/tools/rag",
+    icon: "📚",
+  },
+  {
+    id: "agent-security",
+    name: "Agent Security",
+    description: "Validate agent tool calls against the expected path",
+    href: "/tools/agent-security",
+    icon: "🛡️",
+  },
+  {
+    id: "prompt-eval",
+    name: "Prompt Eval",
+    description: "Golden-set + red-team testing of prompts",
+    href: "/tools/prompt-eval",
+    icon: "🎯",
   },
 ];

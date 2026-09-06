@@ -1,5 +1,41 @@
 @import "tailwindcss";
 
+/* ---- Claude Code-style beige theme ---- */
+:root {
+  /* Surfaces */
+  --bg: #f5f0e8;            /* main canvas — warm cream */
+  --bg-elev: #fdfaf4;       /* cards / raised panels */
+  --bg-sunken: #ece4d6;     /* sidebar, wells */
+  --bg-hover: #e7ddcc;
+
+  /* Ink */
+  --ink: #1a1a1a;           /* primary text */
+  --ink-soft: #57534e;      /* secondary text */
+  --ink-faint: #8a8378;     /* muted / placeholders */
+
+  /* Lines */
+  --line: #e0d6c5;
+  --line-strong: #cbbfa9;
+
+  /* Accent (orange — Claude/QA warm accent) */
+  --accent: #c1573a;
+  --accent-strong: #9e4128;
+  --accent-soft: rgba(193, 87, 58, 0.1);
+  --accent-soft-2: rgba(193, 87, 58, 0.18);
+
+  /* Status */
+  --ok: #2f7d4f;
+  --warn: #a16207;
+  --bad: #b91c1c;
+}
+
+* {
+  border-color: var(--line);
+}
+
+html,
 body {
-  background: #0e0f13;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
