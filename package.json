@@ -1,0 +1,19 @@
+{
+  "name": "qahub",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace @qahub/web run dev",
+    "dev:runner": "npm --workspace @qahub/runner run dev",
+    "test:web": "npm --workspace @qahub/web run typecheck",
+    "test:runner": "npm --workspace @qahub/runner test",
+    "test:api": "cd services/api && .venv\\Scripts\\python -m pytest -q",
+    "test": "npm run test:web && npm run test:runner && npm run test:api"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3"
+  }
+}
