@@ -71,15 +71,9 @@ export default function HubLayout({
         </nav>
 
         <div className="border-t px-4 py-3">
-          <div className="flex items-center justify-between text-[11px] text-[var(--ink-faint)]">
-            <span>LLM</span>
-            <span className="rounded bg-[var(--accent-soft)] px-1.5 py-0.5 font-medium text-[var(--accent-strong)]">
-              deepseek
-            </span>
-          </div>
           <Link
             href="/settings"
-            className={`mt-2 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
+            className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition ${
               pathname === "/settings"
                 ? "bg-[var(--accent-soft-2)] font-semibold text-[var(--accent-strong)]"
                 : "text-[var(--ink-soft)] hover:bg-[var(--bg-hover)] hover:text-[var(--ink)]"
