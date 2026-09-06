@@ -119,3 +119,50 @@ export function testGithub(): Promise<{
     "/settings/test/github",
   );
 }
+
+// ---- Jira issue fetch ----
+
+export interface JiraIssue {
+  key: string;
+  summary: string;
+  description: string;
+  issue_type: string;
+  status: string;
+  priority: string;
+  labels: string[];
+  parent: string | null;
+  url: string;
+}
+
+export function fetchJiraIssue(issueKey: string): Promise<{ issue: JiraIssue }> {
+  return request<{ issue: JiraIssue }>("/connectors/jira/fetch", {
+    method: "POST",
+    body: JSON.stringify({ issue_key: issueKey }),
+  });
+}
+
+// ---- GitHub push/pull ----
+
+export interface GithubFile {
+  path: string;
+  content: string;
+}
+
+export function pushFilesToGithub(
+  files: GithubFile[],
+  opts: { prefix?: string; message?: string } = {},
+): Promise<{ ok: boolean; results: { path: string; ok: boolean; commit_sha?: string; error?: string }[] }> {
+  return request<{
+    ok: boolean;
+    results: { path: string; ok: boolean; commit_sha?: string; error?: string }[];
+  }>("/connectors/github/push-files", {
+    method: "POST",
+    body: JSON.stringify({ files, prefix: opts.prefix, message: opts.message }),
+  });
+}
+
+export function readGithubFile(path: string): Promise<{ ok: boolean; content: string; sha?: string }> {
+  return request<{ ok: boolean; content: string; sha?: string }>(
+    `/connectors/github/read?path=${encodeURIComponent(path)}`,
+  );
+}

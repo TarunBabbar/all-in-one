@@ -2,8 +2,15 @@
 
 import { useState } from "react";
 
-import { runEngine, type EngineRunResult } from "@/lib/api";
+import { GitHubPusher } from "@/components/github-pusher";
+import { JiraIssueFetcher } from "@/components/jira-issue-fetcher";
+import { runEngine, type EngineRunResult, type GithubFile, type JiraIssue } from "@/lib/api";
 import { TOOL_FORMS, type ToolField } from "@/lib/tool-forms";
+
+// Tools whose primary input is a free-text requirement: show "Load from Jira".
+const REQUIREMENT_TOOLS = new Set(["intake", "requirement-doctor", "test-cases"]);
+// Tools whose output is code/files: show "Push to GitHub".
+const FILE_OUTPUT_TOOLS = new Set(["codegen", "executor", "etl", "a11y"]);
 
 function parseField(field: ToolField, raw: string): unknown {
   if (raw.trim() === "") return undefined;
@@ -22,9 +29,7 @@ function parseField(field: ToolField, raw: string): unknown {
 export function ToolWorkspace({ toolId }: { toolId: string }) {
   const def = TOOL_FORMS[toolId];
   const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      (def?.fields ?? []).map((f) => [f.name, f.default ?? ""]),
-    ),
+    Object.fromEntries((def?.fields ?? []).map((f) => [f.name, f.default ?? ""])),
   );
   const [output, setOutput] = useState<EngineRunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +60,32 @@ export function ToolWorkspace({ toolId }: { toolId: string }) {
       setBusy(false);
     }
   };
+
+  const onJiraFetched = (_issue: JiraIssue, text: string) => {
+    const textField = def.fields.find((f) => f.name === "text");
+    if (textField) {
+      setValues((v) => ({ ...v, text }));
+    }
+  };
+
+  // Derive pushable files from the output payload.
+  const pushFiles: GithubFile[] = (() => {
+    if (!output) return [];
+    const p = output.payload;
+    // codegen / executor emit { files: [{ name, content }] } or [{ path, content }]
+    const nested = (p as { files?: { name?: string; content?: string }[] }).files;
+    if (Array.isArray(nested)) {
+      return nested
+        .filter((f) => f.content)
+        .map((f) => ({ path: f.name ?? "artifact.txt", content: f.content as string }));
+    }
+    // a11y / etl / release: emit a report payload — offer it as a JSON file.
+    const json = JSON.stringify(p, null, 2);
+    return json ? [{ path: `${toolId}-output.json`, content: json }] : [];
+  })();
+
+  const showJira = REQUIREMENT_TOOLS.has(toolId);
+  const showPush = FILE_OUTPUT_TOOLS.has(toolId) && pushFiles.length > 0;
 
   return (
     <div className="mx-auto max-w-4xl space-y-4">
@@ -95,7 +126,9 @@ export function ToolWorkspace({ toolId }: { toolId: string }) {
                   <input
                     type="checkbox"
                     checked={(values[f.name] ?? "") === "on"}
-                    onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.checked ? "on" : "" }))}
+                    onChange={(e) =>
+                      setValues((v) => ({ ...v, [f.name]: e.target.checked ? "on" : "" }))
+                    }
                     className="h-4 w-4 accent-[var(--accent)]"
                   />
                 </div>
@@ -110,6 +143,13 @@ export function ToolWorkspace({ toolId }: { toolId: string }) {
             </div>
           ))}
         </div>
+
+        {showJira && (
+          <div className="mt-4">
+            <JiraIssueFetcher onFetched={onJiraFetched} />
+          </div>
+        )}
+
         <div className="mt-4 flex items-center gap-3">
           <button
             onClick={run}
@@ -130,6 +170,15 @@ export function ToolWorkspace({ toolId }: { toolId: string }) {
           <pre className="max-h-96 overflow-auto rounded bg-[var(--bg-sunken)] p-3 text-xs text-[var(--ink-soft)]">
             {JSON.stringify(output.payload, null, 2)}
           </pre>
+          {showPush && (
+            <div className="mt-3">
+              <GitHubPusher
+                files={pushFiles}
+                defaultPrefix={`qa-one/${toolId}`}
+                buttonLabel="Push to repo"
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

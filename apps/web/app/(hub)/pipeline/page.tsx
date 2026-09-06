@@ -3,11 +3,14 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
+import { GitHubPusher } from "@/components/github-pusher";
+import { JiraIssueFetcher } from "@/components/jira-issue-fetcher";
 import {
   approveStage,
   createProject,
   getPipelineState,
   runStage,
+  type GithubFile,
   type PipelineState,
   type StageResult,
 } from "@/lib/api";
@@ -41,6 +44,20 @@ const ENGINE_RE: Partial<Record<Stage, string>> = {
   visual: "visual",
   release: "release-gate",
 };
+
+function githubFilesFromCodegen(r: StageResult): GithubFile[] {
+  const p = r.payload as { files?: { name?: string; content?: string }[] } | undefined;
+  const files = p?.files;
+  if (!Array.isArray(files)) return [];
+  return files
+    .filter((f) => f.content)
+    .map((f) => ({ path: f.name ?? "qa.spec.ts", content: f.content as string }));
+}
+
+function githubFilesFromRelease(r: StageResult): GithubFile[] {
+  if (!r.payload) return [];
+  return [{ path: "release-decision.json", content: JSON.stringify(r.payload, null, 2) }];
+}
 
 function StageBadge({ state }: { state: string }) {
   const map: Record<string, string> = {
@@ -241,6 +258,11 @@ function PipelineBody({ initialProjectId }: { initialProjectId: string | null })
               className="mt-2 w-full rounded-md border bg-[var(--bg)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
               placeholder="Paste a requirement, Jira story, PRD…"
             />
+            <div className="mt-3">
+              <JiraIssueFetcher
+                onFetched={(_issue, text) => setRequirement(text)}
+              />
+            </div>
             <div className="mt-3 flex items-center justify-between gap-2">
               <p className="text-xs text-[var(--ink-faint)]">
                 Leave empty to load the demo requirement fixture.
@@ -354,6 +376,24 @@ function PipelineBody({ initialProjectId }: { initialProjectId: string | null })
                     </div>
                   </div>
                   {showPayload(res)}
+                  {s === "codegen" && res && (
+                    <div className="mt-3">
+                      <GitHubPusher
+                        files={githubFilesFromCodegen(res)}
+                        defaultPrefix="qa-one/suites"
+                        buttonLabel="Push suite to repo"
+                      />
+                    </div>
+                  )}
+                  {s === "release" && res && (
+                    <div className="mt-3">
+                      <GitHubPusher
+                        files={githubFilesFromRelease(res)}
+                        defaultPrefix="qa-one/reports"
+                        buttonLabel="Push report to repo"
+                      />
+                    </div>
+                  )}
                 </div>
               );
             })}

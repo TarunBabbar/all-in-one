@@ -105,3 +105,61 @@ async def github_push(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"ok": True, **result}
+
+
+@router.post("/connectors/github/push-files")
+async def github_push_files(
+    body: dict,
+    session: AsyncSession = Depends(get_session),
+    store: SettingsStore = Depends(get_settings_store),
+) -> dict:
+    """Push multiple files (e.g. a generated suite) to the repo.
+
+    Body: { files: [{ path, content }], prefix?, message?, branch? }
+    Each file goes through the Contents API under an optional prefix dir.
+    """
+    files: list[dict] = body.get("files") or []
+    prefix: str = (body.get("prefix") or "").strip().strip("/")
+    message: str = body.get("message") or "chore: update generated QA artifacts"
+    if not files:
+        raise HTTPException(status_code=400, detail="files is required")
+    cfg = await store.github_config(session)
+    gh = GitHubConnector(cfg)
+    if not gh.configured():
+        raise HTTPException(status_code=400, detail="GitHub is not configured (token + repo).")
+    if body.get("branch"):
+        gh.branch = str(body.get("branch")).strip()
+
+    results = []
+    for f in files:
+        path = f.get("path") or ""
+        content = f.get("content") or ""
+        if not path:
+            continue
+        full = f"{prefix}/{path}" if prefix else path
+        try:
+            res = await gh.write_file(full, content, message)
+            results.append({"path": full, "ok": True, "commit_sha": res.get("commit_sha")})
+        except Exception as exc:  # noqa: BLE001 — report per-file
+            results.append({"path": full, "ok": False, "error": str(exc)})
+    return {"ok": all(r["ok"] for r in results), "results": results}
+
+
+@router.get("/connectors/github/read")
+async def github_read(
+    path: str,
+    session: AsyncSession = Depends(get_session),
+    store: SettingsStore = Depends(get_settings_store),
+) -> dict:
+    """Read a file from the connected repo (pull)."""
+    if not path:
+        raise HTTPException(status_code=400, detail="path is required")
+    cfg = await store.github_config(session)
+    gh = GitHubConnector(cfg)
+    if not gh.configured():
+        raise HTTPException(status_code=400, detail="GitHub is not configured (token + repo).")
+    try:
+        result = await gh.read_file(path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True, **result}
