@@ -78,9 +78,24 @@ class PipelineStore:
             id=prow.id,
             project_id=project_id,
             current_stage=StageId(prow.current_stage),
+            inputs=dict(prow.inputs or {}),
             stage_runs={StageId(r.stage): _to_stage_run(r) for r in runs},
             created_at=prow.created_at,
         )
+
+    async def set_pipeline_inputs(
+        self, session: AsyncSession, project_id: str, inputs: dict
+    ) -> None:
+        """Persist project-level pipeline inputs (requirement + overrides)."""
+        prow = (
+            await session.execute(
+                select(db.PipelineRow).where(db.PipelineRow.project_id == project_id)
+            )
+        ).scalar_one_or_none()
+        if prow is None:
+            raise PipelineNotFoundError(project_id)
+        prow.inputs = inputs
+        await session.commit()
 
     # ---- stage runs ----
 
@@ -143,6 +158,56 @@ class PipelineStore:
             output_artifact_id=None,
             error=None,
         )
+
+    async def set_stage_running(
+        self,
+        session: AsyncSession,
+        project_id: str,
+        stage: StageId,
+        input_artifact_id: str | None = None,
+    ) -> StageRun:
+        """Mark a stage as executing (automatic chain, live UI state)."""
+        return await self._upsert_run(
+            session,
+            project_id,
+            stage,
+            state=ApprovalState.RUNNING.value,
+            error=None,
+            input_artifact_id=input_artifact_id or None,
+        )
+
+    async def complete_stage_auto(
+        self,
+        session: AsyncSession,
+        project_id: str,
+        stage: StageId,
+        artifact: Artifact,
+    ) -> StageRun:
+        """Store a stage output and mark the stage approved in one step.
+
+        Used by the automatic chain runner: a successful stage output is
+        accepted without a human approval gate and execution continues to the
+        next stage.
+        """
+        session.add(
+            db.ArtifactRow(
+                id=artifact.id,
+                project_id=project_id,
+                stage=stage.value,
+                kind=artifact.kind,
+                payload=artifact.payload,
+                state=ApprovalState.APPROVED.value,
+            )
+        )
+        run = await self._upsert_run(
+            session,
+            project_id,
+            stage,
+            output_artifact_id=artifact.id,
+            state=ApprovalState.APPROVED.value,
+            error=None,
+        )
+        return run
 
     async def complete_stage(
         self, session: AsyncSession, project_id: str, stage: StageId, artifact: Artifact
@@ -252,6 +317,75 @@ class PipelineStore:
             )
         ).scalars().all()
         return [_to_artifact(r) for r in rows]
+
+    async def get_latest_artifact(
+        self, session: AsyncSession, project_id: str, stage: StageId
+    ) -> Artifact | None:
+        """Most recent artifact stored for a stage (chain input resolution)."""
+        row = (
+            await session.execute(
+                select(db.ArtifactRow)
+                .where(
+                    db.ArtifactRow.project_id == project_id,
+                    db.ArtifactRow.stage == stage.value,
+                )
+                .order_by(db.ArtifactRow.created_at.desc())
+            )
+        ).scalars().first()
+        return _to_artifact(row) if row else None
+
+    # ---- pipeline events (live log) ----
+
+    async def add_event(
+        self,
+        session: AsyncSession,
+        project_id: str,
+        message: str,
+        *,
+        stage: StageId | str | None = None,
+        level: str = "info",
+        run_id: str | None = None,
+    ) -> None:
+        """Append one line to the pipeline's event log."""
+        session.add(
+            db.PipelineEventRow(
+                id=uuid.uuid4().hex,
+                project_id=project_id,
+                run_id=run_id,
+                stage=stage.value if isinstance(stage, StageId) else stage,
+                level=level,
+                message=message,
+            )
+        )
+        await session.commit()
+
+    async def list_events(
+        self,
+        session: AsyncSession,
+        project_id: str,
+        *,
+        limit: int = 500,
+        since_id: str | None = None,
+    ) -> list[dict]:
+        """Most recent event rows oldest-first (for the live UI log)."""
+        stmt = (
+            select(db.PipelineEventRow)
+            .where(db.PipelineEventRow.project_id == project_id)
+            .order_by(db.PipelineEventRow.created_at.asc(), db.PipelineEventRow.id.asc())
+        )
+        if since_id:
+            stmt = stmt.where(db.PipelineEventRow.id > since_id)
+        rows = (await session.execute(stmt.limit(limit))).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "stage": r.stage,
+                "level": r.level,
+                "message": r.message,
+                "created_at": r.created_at,
+            }
+            for r in rows
+        ]
 
 
 # ---- mappers ----

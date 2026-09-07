@@ -24,14 +24,35 @@ export interface Project {
 }
 
 export interface StageStatus {
-  state: string; // not_started | draft | awaiting_approval | approved | ...
+  state: string; // not_started | draft | running | awaiting_approval | approved | ...
   output_artifact_id: string | null;
+  error: string | null;
 }
 
 export interface PipelineState {
   project_id: string;
   current_stage: string;
   stages: Record<string, StageStatus>;
+  inputs?: Record<string, unknown>;
+  running?: boolean;
+}
+
+export interface LogEntry {
+  id: string;
+  stage: string | null;
+  level: string;
+  message: string;
+  created_at: string;
+}
+
+export interface PipelineStatus {
+  project_id: string;
+  running: boolean;
+  current_stage: string;
+  inputs: Record<string, unknown>;
+  stages: Record<string, StageStatus>;
+  log: LogEntry[];
+  defaults?: { base_url?: string; runner_url?: string };
 }
 
 export interface StageResult {
@@ -72,6 +93,63 @@ export function requestChanges(projectId: string, stage: string): Promise<{ stat
   return request<{ state: string }>(`/pipeline/${projectId}/request-changes/${stage}`, {
     method: "POST",
   });
+}
+
+export interface PipelineActionOpts {
+  requirement?: string;
+  source?: string;
+  startStage?: string;
+  overrides?: Record<string, Record<string, unknown>>;
+}
+
+export function startPipeline(
+  projectId: string,
+  opts: PipelineActionOpts = {},
+): Promise<{ ok: boolean; project_id: string; running: boolean }> {
+  return request(`/pipeline/${projectId}/start`, {
+    method: "POST",
+    body: JSON.stringify({
+      requirement: opts.requirement,
+      source: opts.source,
+      start_stage: opts.startStage,
+      overrides: opts.overrides,
+    }),
+  });
+}
+
+export function resumePipeline(
+  projectId: string,
+  stage: string,
+  opts: { requirement?: string; overrides?: Record<string, Record<string, unknown>> } = {},
+): Promise<{ ok: boolean; project_id: string; running: boolean }> {
+  return request(`/pipeline/${projectId}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ stage, requirement: opts.requirement, overrides: opts.overrides }),
+  });
+}
+
+export function stopPipeline(
+  projectId: string,
+): Promise<{ ok: boolean; project_id: string; running: boolean }> {
+  return request(`/pipeline/${projectId}/stop`, { method: "POST" });
+}
+
+export function getPipelineStatus(projectId: string): Promise<PipelineStatus> {
+  return request<PipelineStatus>(`/pipeline/${projectId}/status`);
+}
+
+export interface Artifact {
+  id: string;
+  project_id: string;
+  stage: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  state: string;
+  created_at: string;
+}
+
+export function getArtifact(artifactId: string): Promise<Artifact> {
+  return request<Artifact>(`/artifacts/${artifactId}`);
 }
 
 export interface EngineRunResult {

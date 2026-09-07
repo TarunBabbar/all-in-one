@@ -20,6 +20,7 @@ from ..core.settings import get_settings
 from ..db.core import get_session
 from ..engines import modules as _engine_modules  # noqa: F401  (import triggers self-registration)
 from ..pipeline import registry
+from ..pipeline import runner as chain_runner
 from ..pipeline.models import (
     PIPELINE_STAGES,
     Artifact,
@@ -82,11 +83,136 @@ async def get_pipeline_state(
         stages[stage.value] = {
             "state": run.state.value if run else "not_started",
             "output_artifact_id": run.output_artifact_id if run else None,
+            "error": run.error if run else None,
         }
     return {
         "project_id": project_id,
         "current_stage": pipeline.current_stage.value,
         "stages": stages,
+        "inputs": pipeline.inputs,
+        "running": chain_runner.is_running(project_id),
+    }
+
+
+# ---- automatic pipeline chain (start / resume / status / stop) ----
+
+
+@router.post("/pipeline/{project_id}/start")
+async def start_pipeline_chain(
+    project_id: str,
+    body: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Kick off the automatic multi-agent chain for a project.
+
+    Body: {requirement?: str, source?: str, start_stage?: str, overrides?: {...}}
+    Stages run back-to-back; on failure the chain stops at the failed stage.
+    """
+    body = body or {}
+    store = get_store()
+    try:
+        await store.get_pipeline(session, project_id)
+    except PipelineNotFoundError:
+        raise HTTPException(status_code=404, detail="pipeline not found") from None
+
+    start_stage = None
+    if body.get("start_stage"):
+        try:
+            start_stage = StageId(body["start_stage"])
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"unknown stage {body['start_stage']}") from None
+
+    try:
+        chain_runner.launch_chain(
+            project_id,
+            start_stage=start_stage,
+            requirement=body.get("requirement"),
+            source=body.get("source", "text"),
+            overrides=body.get("overrides"),
+        )
+    except chain_runner.PipelineAlreadyRunningError:
+        raise HTTPException(status_code=409, detail="pipeline is already running") from None
+
+    return {"ok": True, "project_id": project_id, "running": True}
+
+
+@router.post("/pipeline/{project_id}/resume")
+async def resume_pipeline_chain(
+    project_id: str,
+    body: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Resume a stopped pipeline from its failed stage with edited inputs."""
+    body = body or {}
+    stage_raw = body.get("stage")
+    if not stage_raw:
+        raise HTTPException(status_code=400, detail="stage is required to resume")
+    try:
+        stage = StageId(stage_raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"unknown stage {stage_raw}") from None
+
+    try:
+        chain_runner.launch_chain(
+            project_id,
+            start_stage=stage,
+            requirement=body.get("requirement"),
+            overrides=body.get("overrides"),
+        )
+    except chain_runner.PipelineAlreadyRunningError:
+        raise HTTPException(status_code=409, detail="pipeline is already running") from None
+
+    return {"ok": True, "project_id": project_id, "running": True}
+
+
+@router.post("/pipeline/{project_id}/stop")
+async def stop_pipeline_chain(
+    project_id: str,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Cancel the running chain (if any) for a project."""
+    try:
+        chain_runner.cancel_chain(project_id)
+    except chain_runner.PipelineNotRunningError:
+        raise HTTPException(status_code=409, detail="pipeline is not running") from None
+    return {"ok": True, "project_id": project_id, "running": False}
+
+
+@router.get("/pipeline/{project_id}/status")
+async def get_pipeline_status(
+    project_id: str,
+    since_id: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Polled by the UI: stage states + live event log + env defaults."""
+    store = get_store()
+    try:
+        pipeline = await store.get_pipeline(session, project_id)
+    except PipelineNotFoundError:
+        raise HTTPException(status_code=404, detail="pipeline not found") from None
+
+    stages: dict[str, dict] = {}
+    for stage in PIPELINE_STAGES:
+        run = pipeline.stage_runs.get(stage)
+        stages[stage.value] = {
+            "state": run.state.value if run else "not_started",
+            "output_artifact_id": run.output_artifact_id if run else None,
+            "error": run.error if run else None,
+        }
+
+    events = await store.list_events(session, project_id, since_id=since_id)
+    settings = get_settings()
+    return {
+        "project_id": project_id,
+        "running": chain_runner.is_running(project_id),
+        "current_stage": pipeline.current_stage.value,
+        "inputs": pipeline.inputs,
+        "stages": stages,
+        "log": events,
+        "defaults": {
+            "base_url": settings.app_base_url,
+            "runner_url": settings.runner_url,
+        },
     }
 
 

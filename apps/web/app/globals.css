@@ -39,3 +39,62 @@ body {
   color: var(--ink);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+
+/* ---- QA pipeline motion ---- */
+
+@keyframes qa-sonar {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  80%,
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+.qa-sonar {
+  animation: qa-sonar 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes qa-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.qa-rise {
+  animation: qa-rise 0.35s ease-out both;
+}
+
+@keyframes qa-flow {
+  to {
+    background-position: 24px 0;
+  }
+}
+.qa-flow-line {
+  background-image: linear-gradient(
+    to right,
+    transparent 0 45%,
+    currentColor 45% 55%,
+    transparent 55% 100%
+  );
+  background-size: 24px 100%;
+  animation: qa-flow 0.9s linear infinite;
+}
+
+@keyframes qa-scan {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+.qa-scan {
+  animation: qa-scan 1.4s ease-in-out infinite;
+}

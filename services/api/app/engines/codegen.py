@@ -56,8 +56,10 @@ def _build_suite(cases: list[dict], base_url: str) -> dict:
 
 
 async def _codegen(ctx: dict, **payload) -> dict:
+    from ..core.settings import get_settings
+
     cases: list[dict] = payload.get("cases", [])
-    base_url: str = payload.get("base_url", "http://localhost:3000")
+    base_url: str = str(payload.get("base_url") or get_settings().app_base_url)
     result = _build_suite(cases, base_url)
     return {"kind": "test_suite", "payload": result, "engine": "codegen"}
 

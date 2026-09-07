@@ -24,7 +24,7 @@ async def _run_suite(ctx: dict, **payload) -> dict:
     settings = get_settings()
     files: list[dict] = payload.get("files", [])
     suite_id: str = str(payload.get("suite_id", "suite"))
-    base_url: str = str(payload.get("base_url", "http://localhost:3000"))
+    base_url: str = str(payload.get("base_url") or settings.app_base_url)
     runner = str(payload.get("runner_url") or settings.runner_url)
 
     if not files:

@@ -89,6 +89,34 @@ async def init_db() -> None:
         # Pooled Neon connections can race on checkfirst; tables exist already.
         pass
 
+    # Pre-existing databases predate additive schema changes (create_all never
+    # ALTERs). Apply lightweight, idempotent patches so old DBs boot cleanly.
+    await _migrate_pipeline_inputs()
+
+
+async def _migrate_pipeline_inputs() -> None:
+    """Add `pipelines.inputs` (JSON) when the column is missing.
+
+    Safe to run every boot: no-op once the column exists. Tolerates a Neon
+    pooler race where two connections ALTER at once (duplicate-column error).
+    """
+    from sqlalchemy import inspect, text
+    from sqlalchemy.exc import DBAPIError
+
+    async with get_engine().begin() as conn:
+        try:
+
+            def _has_column(sync_conn) -> bool:
+                cols = {c["name"] for c in inspect(sync_conn).get_columns("pipelines")}
+                return "inputs" in cols
+
+            if await conn.run_sync(_has_column):
+                return
+            await conn.execute(text("ALTER TABLE pipelines ADD COLUMN inputs JSON"))
+        except DBAPIError:
+            # Duplicate column from a concurrent ALTER — already migrated.
+            pass
+
 
 async def dispose_db() -> None:
     if _engine is not None:

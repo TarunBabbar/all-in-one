@@ -20,6 +20,7 @@ def utcnow() -> datetime:
 
 class ApprovalState(StrEnum):
     DRAFT = "draft"
+    RUNNING = "running"
     AWAITING_APPROVAL = "awaiting_approval"
     APPROVED = "approved"
     CHANGES_REQUESTED = "changes_requested"
@@ -92,6 +93,7 @@ class Pipeline(BaseModel):
     id: str
     project_id: str
     stage_runs: dict[StageId, StageRun] = Field(default_factory=dict)
+    inputs: dict[str, Any] = Field(default_factory=dict)
     current_stage: StageId = StageId.INTAKE
     created_at: datetime = Field(default_factory=utcnow)
 

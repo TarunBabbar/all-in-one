@@ -24,8 +24,15 @@ class Settings(BaseSettings):
     # Postgres (Neon in .env) or local. sqlite fallback keeps dev light.
     database_url: str = "sqlite+aiosqlite:///./data/qahub.db"
 
+    # URL of the Playwright runner worker (see .env RUNNER_URL).
+    # NOTE: a real shell/OS environment variable named RUNNER_URL overrides the
+    # .env file (pydantic-settings precedence). If you see runs dispatching to
+    # an unexpected host, check for a global RUNNER_URL export and unset it.
     runner_url: str = "http://localhost:8787"
     cors_origins: str = "http://localhost:3000"
+    # Base URL of the app under test — used as the default target by codegen,
+    # the executor (run stage), and the pipeline input resolver.
+    app_base_url: str = "http://localhost:3000"
 
     # --- Jira (REST, pattern from jira-qa-crew-next) ---
     jira_url: str = ""
