@@ -2,24 +2,28 @@
  * QA/One runner worker — executes generated Playwright suites in isolation.
  *
  * Receives { suiteId, files: [{ name, content }], baseUrl } over HTTP, writes
- * the suite into an isolated temp project, runs `npx playwright test` with the
- * JSON reporter, and returns per-test results (status, title, error, duration).
+ * the suite into a per-request temp project, runs Playwright with the JSON
+ * reporter, and returns per-test results.
  *
- * Patterns merged:
- *  - ETL Buddy: sandboxed execution of generated tests in a disposable dir.
- *  - OmnyGO: results come back as structured evidence, never self-reported.
- *  - QAE2E: real execution happens in a container, never on the API host.
+ * Local-dev friendly: a persistent workspace keeps @playwright/test installed
+ * across runs (no per-request npm install) and installs browsers once on first
+ * use. Each request's temp project junctions the workspace node_modules so the
+ * generated spec's `import "@playwright/test"` resolves instantly.
  *
- * The base image (mcr.microsoft.com/playwright) already has browsers + npx.
+ * Windows note: npm/npx are .cmd shims, so they are invoked through `cmd /c`
+ * (direct execFile cannot spawn a .cmd without a shell).
  */
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PORT = Number(process.env.PORT ?? 8787);
+const WORKSPACE = process.env.RUNNER_WORKSPACE ?? join(tmpdir(), "qahub-runner-home");
+const PLAYWRIGHT_VERSION = "1.63.0";
+const IS_WIN = process.platform === "win32";
 const execFileAsync = promisify(execFile);
 
 function sendJson(res, status, body) {
@@ -33,14 +37,79 @@ async function readBody(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+async function exists(p) {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Run a command, routing .cmd shims through cmd /c on Windows. */
+async function run(cmd, args, opts = {}) {
+  if (IS_WIN && (cmd === "npm" || cmd === "npx")) {
+    // Quote args so cmd /c receives a single well-formed command line.
+    const quoted = args.map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" ");
+    return execFileAsync("cmd", ["/c", `${cmd} ${quoted}`], opts);
+  }
+  return execFileAsync(cmd, args, opts);
+}
+
+// ---- workspace setup (once) ----
+
+async function ensureWorkspace() {
+  if (await exists(join(WORKSPACE, "node_modules"))) return;
+  await mkdir(WORKSPACE, { recursive: true });
+  await writeFile(
+    join(WORKSPACE, "package.json"),
+    JSON.stringify(
+      {
+        name: "qahub-runner-workspace",
+        private: true,
+        devDependencies: { "@playwright/test": PLAYWRIGHT_VERSION },
+      },
+      null,
+      2,
+    ),
+  );
+  console.log("[qahub-runner] installing @playwright/test into workspace (first run only)…");
+  await run("npm", ["install", "--no-audit", "--no-fund"], {
+    cwd: WORKSPACE,
+    timeout: 600_000,
+  });
+  if (!process.env.RUNNER_DOCKER) {
+    console.log("[qahub-runner] installing Playwright chromium browser (first run only)…");
+    try {
+      await run("npx", ["playwright", "install", "chromium"], {
+        cwd: WORKSPACE,
+        timeout: 600_000,
+      });
+    } catch (e) {
+      console.log("[qahub-runner] browser install warning:", (e.message || "").slice(0, 300));
+    }
+  }
+}
+
+// ---- run one suite ----
+
 async function runSuite(payload) {
   const { suiteId, files = [], baseUrl } = payload;
+  await ensureWorkspace();
+
   const dir = await mkdtemp(join(tmpdir(), "qahub-run-"));
   try {
-    // Layout: package.json + playwright.config + the spec files.
     await writeFile(
       join(dir, "package.json"),
-      JSON.stringify({ name: `qahub-${suiteId}`, private: true }, null, 2),
+      JSON.stringify(
+        {
+          name: `qahub-${suiteId}`,
+          private: true,
+          devDependencies: { "@playwright/test": PLAYWRIGHT_VERSION },
+        },
+        null,
+        2,
+      ),
     );
     await writeFile(
       join(dir, "playwright.config.js"),
@@ -54,26 +123,21 @@ async function runSuite(payload) {
       await writeFile(target, f.content);
     }
 
-    // Install @playwright/test in the isolated dir (npm ci-style, offline cache
-    // makes this fast in the container; plain npm install otherwise).
-    await writeFile(join(dir, "package.json"), JSON.stringify({
-      name: `qahub-${suiteId}`,
-      private: true,
-      devDependencies: { "@playwright/test": "1.63.0" },
-    }, null, 2));
-    await execFileAsync("npm", ["install", "--no-audit", "--no-fund"], { cwd: dir });
+    // Junction the workspace node_modules so the spec's @playwright/test import
+    // resolves without a per-run install.
+    await linkNodeModules(dir);
 
-    // Run the suite.
+    const cli = join(WORKSPACE, "node_modules", "playwright", "cli.js");
     let stdout = "";
     try {
-      ({ stdout } = await execFileAsync(
-        "npx", ["playwright", "test", "--reporter=json"], { cwd: dir, timeout: 180_000 },
-      ));
+      ({ stdout } = await execFileAsync(process.execPath, [cli, "test", "--reporter=json"], {
+        cwd: dir,
+        timeout: 240_000,
+      }));
     } catch (e) {
-      stdout = e.stdout || "";
+      stdout = e.stdout || e.message || "";
     }
 
-    // Parse the JSON reporter output from stdout.
     let parsed = null;
     try {
       parsed = JSON.parse(stdout);
@@ -98,6 +162,27 @@ async function runSuite(payload) {
   }
 }
 
+async function linkNodeModules(dir) {
+  const nm = join(dir, "node_modules");
+  await rm(nm, { recursive: true, force: true });
+  if (IS_WIN) {
+    // Windows directory junction (no admin needed).
+    try {
+      await execFileAsync("cmd", ["/c", "mklink", "/J", nm, join(WORKSPACE, "node_modules")]);
+      return;
+    } catch {
+      // fall through to symlink
+    }
+    try {
+      await execFileAsync("cmd", ["/c", "mklink", "/D", nm, join(WORKSPACE, "node_modules")]);
+      return;
+    } catch {
+      // leave node_modules absent; the playwright CLI still resolves its own
+      // deps from the workspace path.
+    }
+  }
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
 
@@ -112,7 +197,7 @@ const server = createServer(async (req, res) => {
       const result = await runSuite(payload);
       sendJson(res, 200, result);
     } catch (e) {
-      sendJson(res, 500, { error: "run_failed", message: e.message });
+      sendJson(res, 500, { error: "run_failed", message: (e.message || "").slice(0, 500) });
     }
     return;
   }
@@ -122,4 +207,9 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`[qahub-runner] listening on :${PORT}`);
+  console.log(`[qahub-runner] workspace: ${WORKSPACE}`);
+  ensureWorkspace().then(
+    () => console.log("[qahub-runner] workspace ready"),
+    (e) => console.log("[qahub-runner] workspace setup failed:", (e.message || "").slice(0, 300)),
+  );
 });

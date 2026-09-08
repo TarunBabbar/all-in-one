@@ -146,9 +146,11 @@ def _failure_message(stage: StageId, result: dict) -> str:
     payload = result.get("payload", {}) or {}
     if payload.get("runner_unreachable"):
         runner = payload.get("runner") or "the runner"
+        error = payload.get("error")
+        detail = f" ({error})" if error else ""
         return (
-            f"Runner unreachable at {runner}. Start the runner (or edit the "
-            "runner URL) then resume from this stage."
+            f"Runner unreachable at {runner}{detail}. Start the runner (or edit "
+            "the runner URL) then resume from this stage."
         )
     return str(payload.get("error") or f"{stage.value} stage failed")
 

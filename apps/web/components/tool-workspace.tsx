@@ -72,6 +72,16 @@ export function ToolWorkspace({ toolId }: { toolId: string }) {
   const pushFiles: GithubFile[] = (() => {
     if (!output) return [];
     const p = output.payload;
+    // codegen emits a publish-ready bundle ({ filename: content }).
+    if (p && typeof p === "object") {
+      const bundle = (p as { bundle?: Record<string, string> }).bundle;
+      if (bundle && typeof bundle === "object") {
+        const entries = Object.entries(bundle).filter(
+          ([, content]) => typeof content === "string" && content.length > 0,
+        );
+        if (entries.length) return entries.map(([name, content]) => ({ path: name, content }));
+      }
+    }
     // codegen / executor emit { files: [{ name, content }] } or [{ path, content }]
     const nested = (p as { files?: { name?: string; content?: string }[] }).files;
     if (Array.isArray(nested)) {

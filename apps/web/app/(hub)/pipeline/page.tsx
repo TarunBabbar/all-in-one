@@ -81,8 +81,17 @@ const DONE = new Set(["approved"]);
 const PENDING = new Set(["not_started", "draft"]);
 
 function githubFilesFromCodegen(payload: Record<string, unknown> | undefined): GithubFile[] {
-  const files = (payload as { files?: { tests?: { name?: string; content?: string }[] } } | undefined)
-    ?.files?.tests;
+  if (!payload) return [];
+  // Publish-ready bundle ({ filename: content }) — a self-contained folder
+  // (package.json + config + spec + README) the user can run after pushing.
+  const bundle = payload.bundle as Record<string, string> | undefined;
+  if (bundle && typeof bundle === "object") {
+    return Object.entries(bundle)
+      .filter(([, content]) => typeof content === "string" && content.length > 0)
+      .map(([name, content]) => ({ path: name, content }));
+  }
+  const files = (payload as { files?: { tests?: { name?: string; content?: string }[] } })
+    .files?.tests;
   if (!Array.isArray(files)) return [];
   return files
     .filter((f) => f.content)
