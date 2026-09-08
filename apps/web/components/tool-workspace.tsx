@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { ArtifactView } from "@/components/artifact-view";
 import { GitHubPusher } from "@/components/github-pusher";
 import { JiraIssueFetcher } from "@/components/jira-issue-fetcher";
 import { runEngine, type EngineRunResult, type GithubFile, type JiraIssue } from "@/lib/api";
@@ -174,14 +175,12 @@ export function ToolWorkspace({ toolId }: { toolId: string }) {
 
       {output && (
         <div className="rounded-xl border bg-[var(--bg-elev)] p-5 shadow-sm">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--ink-faint)]">
-            Output · {output.kind}
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--ink-faint)]">
+            Output
           </p>
-          <pre className="max-h-96 overflow-auto rounded bg-[var(--bg-sunken)] p-3 text-xs text-[var(--ink-soft)]">
-            {JSON.stringify(output.payload, null, 2)}
-          </pre>
+          <ArtifactView payload={output.payload} />
           {showPush && (
-            <div className="mt-3">
+            <div className="mt-4">
               <GitHubPusher
                 files={pushFiles}
                 defaultPrefix={`qa-one/${toolId}`}

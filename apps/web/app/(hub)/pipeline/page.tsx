@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
+import { ArtifactView } from "@/components/artifact-view";
 import { GitHubPusher } from "@/components/github-pusher";
 import { JiraIssueFetcher } from "@/components/jira-issue-fetcher";
 import {
@@ -1002,16 +1003,14 @@ function StageCard({
             onClick={() => setExpanded((e) => !e)}
             className="shrink-0 rounded-lg border border-[var(--line-strong)] px-2.5 py-1.5 text-[11px] font-bold text-[var(--ink-soft)] transition hover:bg-[var(--bg-hover)]"
           >
-            {expanded ? "Hide JSON" : "JSON"}
+            {expanded ? "Hide" : "Details"}
           </button>
         )}
       </div>
 
       {isDone && expanded && payload && (
         <div className="border-t border-[var(--line)]/70 px-4 py-3">
-          <pre className="max-h-72 overflow-auto rounded-xl bg-[#141210] p-3 font-mono text-[11px] leading-relaxed text-[#e7e2d8]">
-            {JSON.stringify(payload, null, 2)}
-          </pre>
+          <ArtifactView payload={payload} />
         </div>
       )}
       {isDone && artifactError && (
