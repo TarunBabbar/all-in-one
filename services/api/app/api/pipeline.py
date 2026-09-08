@@ -120,7 +120,8 @@ async def start_pipeline_chain(
         try:
             start_stage = StageId(body["start_stage"])
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"unknown stage {body['start_stage']}") from None
+            stage_name = str(body["start_stage"])
+            raise HTTPException(status_code=400, detail=f"unknown stage {stage_name}") from None
 
     try:
         chain_runner.launch_chain(

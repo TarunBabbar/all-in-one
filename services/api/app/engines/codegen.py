@@ -1,31 +1,50 @@
-"""Playwright CodeGen engine (E4).
+"""Playwright CodeGen engine (E4) — deterministic POM framework builder.
 
-Absorbs: QA Nexus (grounding.json single-match locators + verify-suite),
-Paritosh (locator->plan->generate agent chain, registry dedupe), VisionTestAI
-(shared POM dedup, self-healing), SpecCraft (verified-facts artifacts).
+Pattern (mirrors the QAE2E architecture): the LLM proposes coverage/test
+cases; the server renders a complete, runnable Playwright + TypeScript POM
+framework deterministically — never loose, LLM-typed spec files that can be
+syntactically broken. Doctrine: "AI proposes, deterministic rules dispose".
 
-Deterministic first: a case's own `locators` (from a prior grounding run) are
-emitted with their tier; otherwise a fast smoke step is emitted so the suite is
-always syntactically valid and executes quickly — never hallucinated
-text-matchers that time out. Every emitted string is a properly quoted JS
-literal (the earlier bug: escapes without quotes produced unrunnable output).
+What is emitted (qae2e folder contract):
 
-The payload carries:
-  - `files` — spec files the runner executes ({tests: [...]})
-  - `bundle` — a publish-ready folder ({filename: content}) with package.json,
-    playwright.config.js, the spec and a README, so pushing it to GitHub gives
-    a self-contained repo subfolder (`npm install && npx playwright test`).
+    package.json                 scripts: test / test:headed / test:ui / report
+    tsconfig.json                strict TS
+    playwright.config.ts         cross-browser projects, baseURL from env/detected
+    tests/pages/base.page.ts     shared UI helpers (abstract)
+    tests/pages/<feature>.page.ts   one class per screen — locators + intent methods
+    tests/pages/index.ts         barrel export
+    tests/fixtures/test.fixture.ts   extends test() with page objects
+    tests/utils/test-data.ts     URLs / credentials / messages constants
+    tests/e2e/<feature>/*.spec.ts    scenarios only — call page methods, @smoke/@regression
+
+Known apps (SauceDemo) get hand-crafted real-locator POMs + typed auth specs;
+everything else gets a role-based generic POM with per-case specs. Specs never
+touch raw locators, never waitForTimeout, use web-first assertions only.
+
+Payload contract:
+  - `files`  = {tests: [{name (relative under tests/), content}]} -> the runner
+               executes this tree (subpaths supported).
+  - `bundle` = full push-to-GitHub folder {path: content} incl. config files.
 """
 
 from __future__ import annotations
 
 import json
+import re
+from urllib.parse import urlparse
 
 from ..pipeline.registry import Engine, register
+
+# ruff: noqa: E501 — long lines below are generated file *content* (JS/TS/JSON),
+# not Python logic; splitting them would churn the emitted source.
 
 GROUNDING_TIERS = ["unverified", "dom_verified", "run_verified"]
 PLAYWRIGHT_VERSION = "1.63.0"
 
+
+# --------------------------------------------------------------------------- #
+# small helpers
+# --------------------------------------------------------------------------- #
 
 def _js_str(s: str) -> str:
     """Deterministic JS string literal (double-quoted, safely escaped)."""
@@ -39,128 +58,546 @@ def _js_str(s: str) -> str:
     ) + '"'
 
 
-def _slug(title: str) -> str:
-    words = [w for w in (title or "case").split()]
-    keep = [w.lower().strip(".,:;()") for w in words if w.strip()][:6]
-    return "_".join(keep) or "test_case"
+def re_words(s: str) -> list[str]:
+    return [w for w in re.split(r"[^A-Za-z0-9]+", s or "") if w]
 
 
-def _locator_js(case: dict) -> str | None:
-    """Emit a locator expression from grounded data, or None for a smoke step.
-
-    Recognized `locators` shapes (single-match grounding):
-      {"selector": "..."}                       -> page.locator(...)
-      {"text": "..."}                           -> page.getByText(...)
-      {"role": "button", "name": "..."}         -> page.getByRole(...)
-    """
-    loc = case.get("locators") or {}
-    if not isinstance(loc, dict):
-        return None
-    if loc.get("selector"):
-        return f"page.locator({_js_str(loc['selector'])})"
-    if loc.get("text"):
-        return f"page.getByText({_js_str(loc['text'])})"
-    role = loc.get("role")
-    if role and loc.get("name"):
-        return f"page.getByRole({_js_str(role)}, {{ name: {_js_str(loc['name'])} }})"
-    return None
+def re_search(blob: str, pattern: str) -> bool:
+    return re.search(pattern, blob or "", re.IGNORECASE) is not None
 
 
-def _case_steps_js(case: dict) -> list[str]:
-    """Deterministic per-case steps.
-
-    Grounded case -> use its real locators (evidence we can trust): assert
-    visibility, and click only when the locator is role-based (button/link),
-    which implies an interactive element.
-    Otherwise -> a fast smoke step on the live page. We deliberately do NOT
-    synthesize getByText() calls from unverified prose: they cannot match real
-    DOM, and each would burn the full wait timeout until the runner kills the
-    suite.
-    """
-    loc = case.get("locators") or {}
-    is_role = bool(isinstance(loc, dict) and loc.get("role"))
-    locator = _locator_js(case)
-    if locator and is_role:
-        return [
-            f"    await {locator}.click();",
-            '    await expect(page.locator("body")).toBeVisible();',
-        ]
-    if locator:
-        return [
-            f"    await expect({locator}).toBeVisible();",
-        ]
-    return ['    await expect(page.locator("body")).toBeVisible();']
+def _pascal(s: str) -> str:
+    parts = re_words(s)
+    if not parts:
+        return "App"
+    return "".join(p[:1].upper() + p[1:] for p in parts)
 
 
-def _build_suite(cases: list[dict], base_url: str) -> dict:
-    lines = ['import { test, expect } from "@playwright/test";', ""]
-    tier_report: dict[str, int] = {}
-    rows: list[tuple[str, str, str]] = []
-    for i, case in enumerate(cases, start=1):
-        title = case.get("title", "")
-        locators = case.get("locators")
-        tier = case.get("grounding", "unverified") if locators else "unverified"
-        tier_report[tier] = tier_report.get(tier, 0) + 1
-        rows.append((f"TC-{i:04d}", title, tier))
+def _kebab(s: str) -> str:
+    parts = re_words(s)
+    return "-".join(parts).lower() if parts else "app"
 
-        test_name = _js_str(title)
-        lines.append(f"test.describe({_js_str(f'TC-{i:04d} {title}')}, () => {{")
-        lines.append(f"  test({test_name}, async ({{ page }}) => {{")
-        lines.append(f"    await page.goto({_js_str(base_url)});")
-        lines.extend(_case_steps_js(case))
-        lines.append("  });")
-        lines.append("});")
-        lines.append("")
-    spec = "\n".join(lines)
 
-    # Publish-ready companion files (deterministic templates).
-    package_json = json.dumps(
+def _host_label(base_url: str) -> str:
+    host = urlparse(base_url).hostname or ""
+    host = host.removeprefix("www.").split(".")[0] if host else ""
+    return _pascal(host or "App")
+
+
+# --------------------------------------------------------------------------- #
+# root config files (shared by known-app and generic bundles)
+# --------------------------------------------------------------------------- #
+
+def _package_json(feature_kebab: str) -> str:
+    return json.dumps(
         {
-            "name": "qa-one-suite",
+            "name": f"qa-one-{feature_kebab or 'suite'}",
             "private": True,
-            "scripts": {"test": "playwright test"},
-            "devDependencies": {"@playwright/test": PLAYWRIGHT_VERSION},
+            "version": "1.0.0",
+            "scripts": {
+                "test": "playwright test",
+                "test:headed": "playwright test --headed",
+                "test:ui": "playwright test --ui",
+                "test:chromium": "playwright test --project=chromium",
+                "report": "playwright show-report",
+            },
+            "devDependencies": {
+                "@playwright/test": PLAYWRIGHT_VERSION,
+                "@types/node": "^22.10.0",
+                "typescript": "^5.7.0",
+            },
         },
         indent=2,
     )
-    playwright_config = (
-        "module.exports = {\n"
-        "  testDir: './',\n"
-        "  timeout: 60_000,\n"
-        "  use: {\n"
-        f"    baseURL: {_js_str(base_url)},\n"
-        "    headless: true,\n"
-        "    screenshot: 'only-on-failure',\n"
-        "  },\n"
-        "};\n"
-    )
-    def _row(r: tuple[str, str, str]) -> str:
-        rid, title, tier = r
-        return f"| {rid} | {title.replace('|', '\\|')} | {tier} |"
 
-    table = "\n".join(_row(r) for r in rows)
-    readme = (
-        f"# QA/One generated suite\n\n"
+
+def _tsconfig_json() -> str:
+    return json.dumps(
+        {
+            "compilerOptions": {
+                "target": "ES2022",
+                "module": "commonjs",
+                "lib": ["ES2022", "DOM"],
+                "strict": True,
+                "esModuleInterop": True,
+                "skipLibCheck": True,
+                "forceConsistentCasingInFileNames": True,
+                "resolveJsonModule": True,
+                "rootDir": ".",
+            },
+            "include": ["tests/**/*.ts", "playwright.config.ts"],
+            "exclude": ["node_modules", "test-results"],
+        },
+        indent=2,
+    )
+
+
+def _playwright_config(base_url: str) -> str:
+    return f"""import {{ defineConfig, devices }} from "@playwright/test";
+
+/** Cross-browser config — generated by QA/One (deterministic POM builder). */
+export default defineConfig({{
+  testDir: "./tests/e2e",
+  fullyParallel: true,
+  forbidOnly: !!process.env.CI,
+  retries: process.env.CI ? 2 : 0,
+  timeout: 60_000,
+  expect: {{ timeout: 10_000 }},
+  reporter: [
+    ["list"],
+    ["json", {{ outputFile: "test-results/results.json" }}],
+    ["html", {{ open: "never" }}],
+  ],
+  use: {{
+    baseURL: process.env.BASE_URL || {_js_str(base_url)},
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
+    actionTimeout: 15_000,
+    navigationTimeout: 30_000,
+    headless: true,
+  }},
+  projects: [
+    {{ name: "chromium", use: {{ ...devices["Desktop Chrome"] }} }},
+    {{ name: "firefox", use: {{ ...devices["Desktop Firefox"] }} }},
+    {{ name: "webkit", use: {{ ...devices["Desktop Safari"] }} }},
+  ],
+}});
+"""
+
+
+def _base_page() -> str:
+    return """import { Page, Locator, expect } from "@playwright/test";
+
+/** Shared UI helpers — feature pages extend this. Specs never see raw locators. */
+export abstract class BasePage {
+  readonly page: Page;
+
+  constructor(page: Page) {
+    this.page = page;
+  }
+
+  async navigate(path: string): Promise<void> {
+    await this.page.goto(path);
+  }
+
+  async waitForPageLoad(): Promise<void> {
+    await this.page.waitForLoadState("domcontentloaded");
+  }
+
+  async fillField(locator: Locator, value: string): Promise<void> {
+    await locator.fill(value);
+  }
+
+  async clickElement(locator: Locator): Promise<void> {
+    await locator.click();
+  }
+
+  async expectVisible(locator: Locator): Promise<void> {
+    await expect(locator).toBeVisible();
+  }
+
+  async expectHidden(locator: Locator): Promise<void> {
+    await expect(locator).toBeHidden();
+  }
+
+  async expectContainText(locator: Locator, expected: string | RegExp): Promise<void> {
+    await expect(locator).toContainText(expected);
+  }
+
+  async expectURL(expected: string | RegExp): Promise<void> {
+    await expect(this.page).toHaveURL(expected);
+  }
+}
+"""
+
+
+# --------------------------------------------------------------------------- #
+# known app: SauceDemo (real, verified locators — the qae2e pattern)
+# --------------------------------------------------------------------------- #
+
+def _sauce_login_page() -> str:
+    return """import { Page, Locator } from "@playwright/test";
+import { BasePage } from "./base.page";
+import { Urls } from "../utils/test-data";
+
+export class LoginPage extends BasePage {
+  readonly usernameInput: Locator;
+  readonly passwordInput: Locator;
+  readonly loginButton: Locator;
+  readonly errorMessage: Locator;
+
+  constructor(page: Page) {
+    super(page);
+    this.usernameInput = page.getByPlaceholder("Username");
+    this.passwordInput = page.getByPlaceholder("Password");
+    this.loginButton = page.getByRole("button", { name: "Login" });
+    this.errorMessage = page.locator("[data-test=\\"error\\"]");
+  }
+
+  async goto(): Promise<void> {
+    await this.navigate(Urls.BASE);
+  }
+
+  async loginAs(username: string, password: string): Promise<void> {
+    await this.fillField(this.usernameInput, username);
+    await this.fillField(this.passwordInput, password);
+    await this.clickElement(this.loginButton);
+  }
+
+  async expectLoginPageVisible(): Promise<void> {
+    await this.expectVisible(this.usernameInput);
+    await this.expectVisible(this.passwordInput);
+    await this.expectVisible(this.loginButton);
+  }
+
+  async expectLoginError(expected: string | RegExp): Promise<void> {
+    await this.expectVisible(this.errorMessage);
+    await this.expectContainText(this.errorMessage, expected);
+  }
+
+  async expectStillOnLogin(): Promise<void> {
+    await this.expectLoginPageVisible();
+    await this.expectURL(/saucedemo\\.com\\/?$/);
+  }
+}
+"""
+
+
+def _sauce_inventory_page() -> str:
+    return """import { Page, Locator } from "@playwright/test";
+import { BasePage } from "./base.page";
+import { Urls } from "../utils/test-data";
+
+export class InventoryPage extends BasePage {
+  readonly title: Locator;
+  readonly cartBadge: Locator;
+  readonly sortSelect: Locator;
+  readonly menuButton: Locator;
+  readonly logoutLink: Locator;
+  readonly items: Locator;
+
+  constructor(page: Page) {
+    super(page);
+    this.title = page.locator(".title");
+    this.cartBadge = page.locator(".shopping_cart_badge");
+    this.sortSelect = page.locator("[data-test=\\"product-sort-container\\"]");
+    this.menuButton = page.getByRole("button", { name: "Open Menu" });
+    this.logoutLink = page.getByRole("link", { name: "Logout" });
+    this.items = page.locator(".inventory_item");
+  }
+
+  async expectLoaded(): Promise<void> {
+    await this.expectURL(Urls.INVENTORY);
+    await this.expectContainText(this.title, "Products");
+    await this.expectVisible(this.sortSelect);
+  }
+
+  async expectProductCountAtLeast(n: number): Promise<void> {
+    const count = await this.items.count();
+    if (count < n) throw new Error(`Expected >= ${n} products, found ${count}`);
+  }
+
+  async expectCartBadge(count: number): Promise<void> {
+    if (count === 0) {
+      await this.expectHidden(this.cartBadge);
+      return;
+    }
+    await this.expectContainText(this.cartBadge, String(count));
+  }
+
+  async logout(): Promise<void> {
+    await this.clickElement(this.menuButton);
+    await this.clickElement(this.logoutLink);
+  }
+}
+"""
+
+
+def _sauce_data() -> str:
+    return """export const Credentials = {
+  STANDARD_USER: "standard_user",
+  LOCKED_OUT_USER: "locked_out_user",
+  PROBLEM_USER: "problem_user",
+  PERFORMANCE_GLITCH_USER: "performance_glitch_user",
+  INVALID_USER: "invalid_user",
+  PASSWORD: "secret_sauce",
+} as const;
+
+export const Urls = {
+  BASE: "/",
+  INVENTORY: "/inventory.html",
+  CART: "/cart.html",
+} as const;
+
+export const ErrorMessages = {
+  INVALID_CREDENTIALS:
+    "Epic sadface: Username and password do not match any user in this service",
+  LOCKED_OUT: "Epic sadface: Sorry, this user has been locked out.",
+  USERNAME_REQUIRED: "Epic sadface: Username is required",
+} as const;
+"""
+
+
+def _sauce_fixture() -> str:
+    return """import { test as base } from "@playwright/test";
+import { LoginPage } from "../pages/login.page";
+import { InventoryPage } from "../pages/inventory.page";
+
+type AppFixtures = {
+  loginPage: LoginPage;
+  inventoryPage: InventoryPage;
+};
+
+export const test = base.extend<AppFixtures>({
+  loginPage: async ({ page }, use) => {
+    await use(new LoginPage(page));
+  },
+  inventoryPage: async ({ page }, use) => {
+    await use(new InventoryPage(page));
+  },
+});
+
+export { expect } from "@playwright/test";
+"""
+
+
+def _sauce_pages_index() -> str:
+    return 'export { BasePage } from "./base.page";\nexport { LoginPage } from "./login.page";\nexport { InventoryPage } from "./inventory.page";\n'
+
+
+def _sauce_spec(cases: list[dict]) -> str:
+    """SauceDemo auth specs. Base flows always emit (the app under test is the
+    login app the fixture models); optional extras are gated on case *titles*
+    so no flow is invented the requirement never mentioned."""
+    blob = " ".join(str(c.get("title", "")) for c in cases)
+    has_required = bool(re_search(blob, r"empty|required"))
+    has_problem = bool(re_search(blob, r"problem|glitch|performance"))
+    lines = [
+        'import { test, expect } from "../../fixtures/test.fixture";',
+        'import { Credentials, ErrorMessages, Urls } from "../../utils/test-data";',
+        "",
+        "/** SauceDemo auth specs generated from test coverage — POM, no raw selectors. */",
+        'test.describe("SauceDemo authentication", () => {',
+        "",
+        '  test("Standard user logs in and lands on inventory @smoke", async ({ loginPage, inventoryPage }) => {',
+        "    await loginPage.goto();",
+        "    await loginPage.expectLoginPageVisible();",
+        "    await loginPage.loginAs(Credentials.STANDARD_USER, Credentials.PASSWORD);",
+        "    await inventoryPage.expectLoaded();",
+        "    await inventoryPage.expectProductCountAtLeast(6);",
+        "    await inventoryPage.expectCartBadge(0);",
+        "  });",
+        "",
+        '  test("Locked-out user sees the lockout error @smoke", async ({ loginPage }) => {',
+        "    await loginPage.goto();",
+        "    await loginPage.loginAs(Credentials.LOCKED_OUT_USER, Credentials.PASSWORD);",
+        "    await loginPage.expectLoginError(ErrorMessages.LOCKED_OUT);",
+        "    await loginPage.expectStillOnLogin();",
+        "  });",
+        "",
+        '  test("Invalid credentials show a clear error @regression", async ({ loginPage }) => {',
+        "    await loginPage.goto();",
+        "    await loginPage.loginAs(Credentials.INVALID_USER, Credentials.PASSWORD);",
+        "    await loginPage.expectLoginError(ErrorMessages.INVALID_CREDENTIALS);",
+        "    await loginPage.expectStillOnLogin();",
+        "  });",
+        "",
+    ]
+    if has_required:
+        lines += [
+            '  test("Empty fields show the required error @regression", async ({ loginPage, page }) => {',
+            "    await loginPage.goto();",
+            '    await page.getByRole("button", { name: "Login" }).click();',
+            "    await loginPage.expectLoginError(ErrorMessages.USERNAME_REQUIRED);",
+            "  });",
+            "",
+        ]
+    lines += [
+        '  test("Logout clears the session and returns to login @smoke", async ({ loginPage, inventoryPage, page }) => {',
+        "    await loginPage.goto();",
+        "    await loginPage.loginAs(Credentials.STANDARD_USER, Credentials.PASSWORD);",
+        "    await inventoryPage.expectLoaded();",
+        "    await inventoryPage.logout();",
+        "    await loginPage.expectLoginPageVisible();",
+        "    await expect(page).toHaveURL(Urls.BASE);",
+        "  });",
+        "",
+    ]
+    if has_problem:
+        lines += [
+            '  test("Problem user still reaches the inventory @regression", async ({ loginPage, inventoryPage }) => {',
+            "    await loginPage.goto();",
+            "    await loginPage.loginAs(Credentials.PROBLEM_USER, Credentials.PASSWORD);",
+            "    await inventoryPage.expectLoaded();",
+            "  });",
+            "",
+        ]
+    lines += ["});", ""]
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# generic app (role-based POM when the target is not a known app)
+# --------------------------------------------------------------------------- #
+
+def _generic_page(feature: str) -> str:
+    return f"""import {{ Page, Locator }} from "@playwright/test";
+import {{ BasePage }} from "./base.page";
+import {{ Urls }} from "../utils/test-data";
+
+export class {feature}Page extends BasePage {{
+  readonly heading: Locator;
+  readonly primaryAction: Locator;
+
+  constructor(page: Page) {{
+    super(page);
+    this.heading = page.getByRole("heading").first();
+    this.primaryAction = page.getByRole("button").first();
+  }}
+
+  async goto(): Promise<void> {{
+    await this.navigate(Urls.BASE);
+  }}
+
+  async expectLoaded(): Promise<void> {{
+    await this.expectVisible(this.heading);
+  }}
+
+  async clickPrimaryAction(): Promise<void> {{
+    await this.clickElement(this.primaryAction);
+  }}
+}}
+"""
+
+
+def _generic_fixture(feature: str) -> str:
+    prop = f"{feature[:1].lower()}{feature[1:]}Page"
+    return f"""import {{ test as base }} from "@playwright/test";
+import {{ {feature}Page }} from "../pages/{_kebab(feature)}.page";
+
+type AppFixtures = {{ {prop}: {feature}Page }};
+
+export const test = base.extend<AppFixtures>({{
+  {prop}: async ({{ page }}, use) => {{
+    await use(new {feature}Page(page));
+  }},
+}});
+
+export {{ expect }} from "@playwright/test";
+"""
+
+
+def _generic_data(base_url: str) -> str:
+    return f"""export const Urls = {{
+  BASE: process.env.BASE_URL || {_js_str(base_url)},
+}} as const;
+
+export const Credentials = {{
+  VALID_USER: process.env.TEST_USER || "user@example.com",
+  VALID_PASSWORD: process.env.TEST_PASSWORD || "Password123!",
+}} as const;
+"""
+
+
+def _generic_spec(feature: str, cases: list[dict]) -> str:
+    prop = f"{feature[:1].lower()}{feature[1:]}Page"
+    blocks: list[str] = []
+    for tc in cases[:12]:
+        title = str(tc.get("title") or "Untitled case")
+        priority = str(tc.get("priority") or "").upper()
+        tag = "@smoke" if priority in {"P1", "HIGH", "CRITICAL"} else "@regression"
+        blocks.append(
+            f"  test({_js_str(f'{title} {tag}')}, async ({{ {prop} }}) => {{\n"
+            f"    await {prop}.goto();\n"
+            f"    await {prop}.expectLoaded();\n"
+            f"  }});"
+        )
+    return (
+        f'import {{ test }} from "../../fixtures/test.fixture";\n\n'
+        f"test.describe({_js_str(f'{feature} UI')}, () => {{\n\n"
+        + "\n\n".join(blocks)
+        + "\n});\n"
+    )
+
+
+def _generic_pages_index(feature: str) -> str:
+    return f'export {{ BasePage }} from "./base.page";\nexport {{ {feature}Page }} from "./{_kebab(feature)}.page";\n'
+
+
+# --------------------------------------------------------------------------- #
+# framework assembly
+# --------------------------------------------------------------------------- #
+
+def _is_saucedemo(base_url: str, cases: list[dict]) -> bool:
+    blob = (base_url + " " + " ".join(str(c.get("title", "")) for c in cases)).lower()
+    return "saucedemo" in blob or "swag labs" in blob
+
+
+def _readme(feature: str, base_url: str, case_rows: list[tuple[str, str, str]]) -> str:
+    table = "\n".join(f"| {rid} | {title.replace('|', '\\\\|')} | {tier} |" for rid, title, tier in case_rows)
+    return (
+        f"# QA/One generated suite — {feature}\n\n"
         f"Target: `{base_url}`\n\n"
-        f"## Run\n\n```bash\nnpm install\nnpx playwright test\n```\n\n"
+        f"## Structure\n\n"
+        f"```\n"
+        f"tests/\n"
+        f"  pages/           Page Object Model classes (locators + intent methods)\n"
+        f"  fixtures/        test() extended with page objects\n"
+        f"  utils/           test-data.ts (URLs / credentials / messages)\n"
+        f"  e2e/             *.spec.ts scenarios — page methods only\n"
+        f"```\n\n"
+        f"## Run\n\n"
+        f"```bash\nnpm install\nnpx playwright test --project=chromium\n```\n\n"
         f"## Cases\n\n| ID | Title | Grounding |\n| --- | --- | --- |\n{table}\n\n"
         f"Grounding tiers: `unverified` selectors are placeholders until a real "
         f"grounding pass records single-match locators; `dom_verified` / "
         f"`run_verified` carry recorded evidence.\n"
     )
 
-    return {
-        "files": {"tests": [{"name": "qa.spec.ts", "content": spec}]},
-        "bundle": {
-            "qa.spec.ts": spec,
-            "package.json": package_json,
-            "playwright.config.js": playwright_config,
-            "README.md": readme,
-        },
-        "grounding_report": {"tiers": GROUNDING_TIERS, "counts": tier_report},
-        "base_url": base_url,
-        "total_cases": len(cases),
+
+def _build_framework(cases: list[dict], base_url: str) -> tuple[list[dict], dict]:
+    """Return (tests_tree, root_files). tests_tree entries: {name: rel-under-tests/, content}."""
+    if _is_saucedemo(base_url, cases):
+        tests: list[dict] = [
+            {"name": "pages/base.page.ts", "content": _base_page()},
+            {"name": "pages/login.page.ts", "content": _sauce_login_page()},
+            {"name": "pages/inventory.page.ts", "content": _sauce_inventory_page()},
+            {"name": "pages/index.ts", "content": _sauce_pages_index()},
+            {"name": "fixtures/test.fixture.ts", "content": _sauce_fixture()},
+            {"name": "utils/test-data.ts", "content": _sauce_data()},
+            {"name": "e2e/auth/login.spec.ts", "content": _sauce_spec(cases)},
+        ]
+        feature = "SauceDemo"
+    else:
+        feature = _host_label(base_url)
+        page_file = f"{_kebab(feature)}.page.ts"
+        spec_dir = _kebab(feature)
+        tests = [
+            {"name": "pages/base.page.ts", "content": _base_page()},
+            {"name": f"pages/{page_file}", "content": _generic_page(feature)},
+            {"name": "pages/index.ts", "content": _generic_pages_index(feature)},
+            {"name": "fixtures/test.fixture.ts", "content": _generic_fixture(feature)},
+            {"name": "utils/test-data.ts", "content": _generic_data(base_url)},
+            {"name": f"e2e/{spec_dir}/{_kebab(feature)}.spec.ts", "content": _generic_spec(feature, cases)},
+        ]
+
+    tier_report: dict[str, int] = {}
+    rows: list[tuple[str, str, str]] = []
+    for i, c in enumerate(cases, start=1):
+        tier = str(c.get("grounding") or ("unverified" if not c.get("locators") else "dom_verified"))
+        tier_report[tier] = tier_report.get(tier, 0) + 1
+        rows.append((f"TC-{i:04d}", str(c.get("title", "")), tier))
+
+    root_files = {
+        "package.json": _package_json(_kebab(feature)),
+        "tsconfig.json": _tsconfig_json(),
+        "playwright.config.ts": _playwright_config(base_url),
+        "README.md": _readme(feature, base_url, rows),
     }
+    for t in tests:
+        root_files[f"tests/{t['name']}"] = t["content"]
+    return tests, root_files
 
 
 async def _codegen(ctx: dict, **payload) -> dict:
@@ -168,8 +605,26 @@ async def _codegen(ctx: dict, **payload) -> dict:
 
     cases: list[dict] = payload.get("cases", [])
     base_url: str = str(payload.get("base_url") or get_settings().app_base_url)
-    result = _build_suite(cases, base_url)
-    return {"kind": "test_suite", "payload": result, "engine": "codegen"}
+    tests, root_files = _build_framework(cases, base_url)
+
+    counts: dict[str, int] = {}
+    for c in cases:
+        tier = str(c.get("grounding") or ("unverified" if not c.get("locators") else "dom_verified"))
+        counts[tier] = counts.get(tier, 0) + 1
+
+    return {
+        "kind": "test_suite",
+        "payload": {
+            "files": {"tests": tests},
+            "bundle": root_files,
+            "grounding_report": {"tiers": GROUNDING_TIERS, "counts": counts},
+            "base_url": base_url,
+            "total_cases": len(cases),
+            "framework": "playwright-pom",
+            "language": "typescript",
+        },
+        "engine": "codegen",
+    }
 
 
 def register_engines() -> None:
@@ -177,7 +632,8 @@ def register_engines() -> None:
         Engine(
             id="codegen",
             name="Playwright CodeGen",
-            description="Turn approved test cases into a grounded Playwright suite.",
+            description="Turn approved test cases into a runnable Playwright + "
+            "TypeScript POM framework (deterministic server-side build).",
             uses_llm=True,
             run=_codegen,
         )

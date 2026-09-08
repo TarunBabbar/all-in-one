@@ -16,8 +16,6 @@ import asyncio
 import uuid
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from ..core.llm import LLMRouter
 from ..core.settings import get_settings
 from ..db.core import get_session_factory

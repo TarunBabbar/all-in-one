@@ -18,7 +18,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const WORKSPACE = process.env.RUNNER_WORKSPACE ?? join(tmpdir(), "qahub-runner-home");
@@ -119,7 +119,7 @@ async function runSuite(payload) {
     );
     for (const f of files || []) {
       const target = join(dir, "tests", f.name);
-      await mkdir(join(dir, "tests"), { recursive: true });
+      await mkdir(dirname(target), { recursive: true });
       await writeFile(target, f.content);
     }
 
