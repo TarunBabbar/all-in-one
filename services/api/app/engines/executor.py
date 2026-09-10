@@ -60,18 +60,22 @@ async def _run_suite(ctx: dict, **payload) -> dict:
 
     results = data.get("results") or []
     ok = bool(data.get("ok"))
-    # A reachable runner that reports ok=false produced no usable evidence
-    # (playwright failed to launch/run). That must stop the chain with the
+    # A reachable runner that produced no usable evidence (playwright failed to
+    # launch/parse, or the suite yielded zero specs) must stop the chain with the
     # runner's own output — never auto-approve empty results into triage/release.
     if not ok or not results:
         excerpt = (data.get("raw_stdout_excerpt") or "").strip().replace("\n", " ")[-300:]
         reason = excerpt or data.get("error") or "no tests ran"
+        if not ok:
+            detail = "playwright produced no parseable report"
+        else:
+            detail = "the report contained 0 specs (check the suite layout)"
         return {
             "kind": "run_results",
             "payload": {
                 "runner": runner,
                 "suite_id": suite_id,
-                "error": f"runner returned ok=false with 0 results — {reason}",
+                "error": f"runner returned no results — {detail}. {reason}".strip(),
                 "results": [],
                 "raw_stdout_excerpt": excerpt,
             },

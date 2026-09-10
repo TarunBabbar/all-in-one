@@ -1131,18 +1131,32 @@ function BlockedPanel({
           <div className="grid gap-3 sm:grid-cols-2">
             {fields.map((f) => {
               const envVal = f.envDefaultKey ? defaults?.[f.envDefaultKey] : undefined;
+              // Empty override means "use the resolved default" (the server
+              // filters empty overrides the same way).
+              const effective = overrides[stage]?.[f.key] || envVal || "";
               return (
                 <div key={f.key}>
-                  <label className="text-[10px] font-black uppercase tracking-widest text-[var(--ink-faint)]">
+                  <label className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-[var(--ink-faint)]">
                     {f.label}
+                    {f.key === "runner_url" && (
+                      <span className="rounded bg-[var(--bg-sunken)] px-1.5 py-0.5 text-[9px] font-bold normal-case tracking-normal text-[var(--ink-faint)]">
+                        internal — where Playwright runs
+                      </span>
+                    )}
                   </label>
                   <input
                     type={f.type ?? "text"}
-                    value={overrides[stage]?.[f.key] ?? ""}
+                    value={effective}
                     onChange={(e) => onOverride(stage, f.key, e.target.value)}
-                    placeholder={f.placeholder ?? envVal ?? ""}
+                    placeholder={f.placeholder ?? ""}
                     className="mt-1.5 w-full rounded-lg border bg-[var(--bg)] px-3 py-2 font-mono text-xs outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
                   />
+                  {f.key === "base_url" && (
+                    <p className="mt-1 text-[10px] leading-relaxed text-[var(--ink-faint)]">
+                      The application being tested — detected from your requirement&apos;s URL.
+                      Edit only to override the target.
+                    </p>
+                  )}
                 </div>
               );
             })}

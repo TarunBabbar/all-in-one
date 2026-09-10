@@ -21,6 +21,7 @@ from ..db.core import get_session
 from ..engines import modules as _engine_modules  # noqa: F401  (import triggers self-registration)
 from ..pipeline import registry
 from ..pipeline import runner as chain_runner
+from ..pipeline.chain import detect_target_url
 from ..pipeline.models import (
     PIPELINE_STAGES,
     Artifact,
@@ -203,6 +204,15 @@ async def get_pipeline_status(
 
     events = await store.list_events(session, project_id, since_id=since_id)
     settings = get_settings()
+    # The app under test is whatever URL the requirement names. Prefer the URL
+    # persisted at start (inputs.app_url); fall back to detecting it from the
+    # stored requirement text; the env default is the last resort.
+    requirement_text = str(pipeline.inputs.get("requirement") or "")
+    effective_base_url = str(
+        pipeline.inputs.get("app_url")
+        or detect_target_url(requirement_text)
+        or settings.app_base_url
+    )
     return {
         "project_id": project_id,
         "running": chain_runner.is_running(project_id),
@@ -211,7 +221,7 @@ async def get_pipeline_status(
         "stages": stages,
         "log": events,
         "defaults": {
-            "base_url": settings.app_base_url,
+            "base_url": effective_base_url,
             "runner_url": settings.runner_url,
         },
     }

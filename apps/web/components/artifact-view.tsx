@@ -293,6 +293,7 @@ function RunResultsView({ p }: { p: Unknown }) {
               const st = statusOf(o ?? {});
               const err = asStr(o?.error);
               const dur = asNum(o?.duration_ms);
+              const file = asStr(o?.file);
               return (
                 <li key={i} className="rounded-lg border border-[var(--line)]/70 bg-[var(--bg)] px-3 py-2">
                   <div className="flex items-center gap-2">
@@ -301,6 +302,7 @@ function RunResultsView({ p }: { p: Unknown }) {
                     <Chip tone={tone[st] ?? "neutral"}>{st}</Chip>
                     {dur != null && <span className="shrink-0 text-[11px] tabular-nums text-[var(--ink-faint)]">{dur} ms</span>}
                   </div>
+                  {file && <p className="mt-0.5 pl-4 font-mono text-[10px] text-[var(--ink-faint)]">{file}</p>}
                   {err && <p className="mt-1 rounded bg-[var(--bad)]/5 px-2 py-1 font-mono text-[11px] leading-relaxed text-[var(--bad)]">{err}</p>}
                 </li>
               );
