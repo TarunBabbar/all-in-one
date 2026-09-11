@@ -40,12 +40,18 @@ import {
  * trail still has forensic value, so it survives as a collapsed "Event trail".
  */
 
-// Matches services/api PIPELINE_STAGES order.
+// Matches services/api PIPELINE_STAGES order. Every generator is followed by
+// its deterministic eval gate, so a weak artifact stops the chain at the gate
+// that caught it rather than flowing into automation.
 const STAGES = [
   "intake",
   "doctor",
+  "test_plan",
+  "eval_plan",
   "test_cases",
+  "eval_cases",
   "codegen",
+  "eval_code",
   "run",
   "triage",
   "visual",
@@ -54,20 +60,42 @@ const STAGES = [
 type Stage = (typeof STAGES)[number];
 
 // The auto-chain never executes optional stages (the API's SKIPPABLE_STAGES),
-// so `visual` is excluded from the chain, the totals and the progress bar. A
-// node that can never light up would leave every completed run reading "7/8".
+// so `visual` is excluded from the chain, the totals and the progress bar.
 const CHAIN_STAGES = STAGES.filter((s) => s !== "visual");
 type ChainStage = (typeof CHAIN_STAGES)[number];
+
+// Eval gates are deterministic scoring stages: they render as a metric table
+// rather than a document, so the row list stays readable at this length.
+const EVAL_STAGES = new Set<Stage>(["eval_plan", "eval_cases", "eval_code"]);
+
+/**
+ * Resuming a failed gate must regenerate the artifact it checked, not re-run
+ * the gate. Re-running the check would score identical input and reach the
+ * identical verdict.
+ */
+const GATE_SOURCE: Partial<Record<Stage, ChainStage>> = {
+  eval_plan: "test_plan",
+  eval_cases: "test_cases",
+  eval_code: "codegen",
+};
+
+function resumeTarget(stage: ChainStage): ChainStage {
+  return GATE_SOURCE[stage] ?? stage;
+}
 
 const LABELS: Record<Stage, { name: string; icon: IconName; desc: string }> = {
   intake: { name: "Intake", icon: "intake", desc: "Normalize the requirement" },
   doctor: { name: "Doctor", icon: "doctor", desc: "Quality score + findings" },
-  test_cases: { name: "Test Cases", icon: "cases", desc: "Typed, prioritized cases" },
-  codegen: { name: "CodeGen", icon: "codegen", desc: "Playwright TS suite" },
-  run: { name: "Run", icon: "runner", desc: "Sandboxed execution" },
+  test_plan: { name: "Test Plan", icon: "plan", desc: "Criteria + category matrix" },
+  eval_plan: { name: "Plan Eval", icon: "gate", desc: "Coverage + grounding metrics" },
+  test_cases: { name: "Test Cases", icon: "cases", desc: "Traceable, prioritized cases" },
+  eval_cases: { name: "Case Eval", icon: "gate", desc: "Conformance + traceability" },
+  codegen: { name: "CodeGen", icon: "codegen", desc: "Playwright POM suite" },
+  eval_code: { name: "Code Eval", icon: "gate", desc: "Coverage + locator grounding" },
+  run: { name: "Run", icon: "runner", desc: "Execute, heal, retry" },
   triage: { name: "Triage", icon: "triage", desc: "Cluster root causes" },
   visual: { name: "Visual", icon: "visual", desc: "Regression check (optional)" },
-  release: { name: "Release", icon: "release", desc: "GO / NO-GO verdict" },
+  release: { name: "Release", icon: "release", desc: "GO / NO-GO + confidence" },
 };
 
 // Editable inputs exposed per agent (mirrors OVERRIDABLE_INPUTS on the API).
@@ -142,9 +170,23 @@ function stageSummary(stage: Stage, payload: Record<string, unknown> | null | un
         const d = payload.diagnosis as { quality_score?: number } | undefined;
         return d?.quality_score != null ? `Score ${d.quality_score}/100` : "Diagnosis ready";
       }
+      case "test_plan": {
+        const total = (payload.summary as { total_criteria?: number } | undefined)?.total_criteria;
+        return total != null ? `${total} criteria planned` : "Plan ready";
+      }
+      case "eval_plan":
+      case "eval_cases":
+      case "eval_code": {
+        const s = payload.summary as { passed?: number; total?: number } | undefined;
+        if (s?.total == null) return "Gate complete";
+        const failed = (s.total ?? 0) - (s.passed ?? 0);
+        return failed > 0
+          ? `${s.passed}/${s.total} metrics passed · ${failed} failed`
+          : `all ${s.total} metrics passed`;
+      }
       case "test_cases": {
         const c = payload.count as number | undefined;
-        return c != null ? `${c} cases · prioritized` : "Cases ready";
+        return c != null ? `${c} cases · traceable` : "Cases ready";
       }
       case "codegen": {
         const files = (payload.files as { tests?: unknown[] } | undefined)?.tests;
@@ -153,7 +195,14 @@ function stageSummary(stage: Stage, payload: Record<string, unknown> | null | un
       case "run": {
         const results = (payload.results as { status?: string }[] | undefined) ?? [];
         const passed = results.filter((r) => r.status === "passed").length;
-        return results.length ? `${passed}/${results.length} passed` : "Run complete";
+        const attempts = (payload.attempts as unknown[] | undefined) ?? [];
+        const fixed = (payload.auto_fixed as unknown[] | undefined) ?? [];
+        const base = results.length
+          ? `${passed}/${results.length} passed`
+          : "Run complete";
+        if (fixed.length) return `${base} · ${fixed.length} auto-repaired`;
+        if (attempts.length > 1) return `${base} · ${attempts.length} attempts`;
+        return base;
       }
       case "triage": {
         const tf = payload.total_failures as number | undefined;
@@ -161,7 +210,9 @@ function stageSummary(stage: Stage, payload: Record<string, unknown> | null | un
       }
       case "release": {
         const v = payload.verdict as string | undefined;
-        return v ? `Verdict ${v}` : "Decision ready";
+        const conf = (payload.confidence as { score?: number } | undefined)?.score;
+        if (!v) return "Decision ready";
+        return conf != null ? `${v} · ${conf}% confidence` : `Verdict ${v}`;
       }
       default:
         return "";
@@ -888,7 +939,7 @@ function RunList({
             onOverride={onOverride}
             busy={busy}
             running={running}
-            onResume={() => onResume(s)}
+            onResume={() => onResume(resumeTarget(s))}
             defaults={defaults}
           />
         ))}
@@ -961,9 +1012,19 @@ function RunRow({
   }, [artifactId, loaded]);
 
   const summary = stageSummary(stage, payload);
+  // A failed gate is fixed by editing the input of the stage it checks, so the
+  // requirement editor appears on the gates too.
+  const canEditRequirement =
+    stage === "doctor" ||
+    stage === "test_plan" ||
+    stage === "eval_plan" ||
+    stage === "test_cases" ||
+    stage === "eval_cases" ||
+    stage === "codegen" ||
+    stage === "run";
   const fields = STAGE_FIELDS[stage] ?? [];
-  const editableRequirement =
-    stage === "doctor" || stage === "test_cases" || stage === "codegen" || stage === "run";
+  const isGate = EVAL_STAGES.has(stage);
+  const regenerateFrom = isGate ? LABELS[resumeTarget(stage)].name : "";
 
   return (
     <li
@@ -1100,7 +1161,7 @@ function RunRow({
                 </div>
               )}
 
-              {editableRequirement && (
+              {canEditRequirement && (
                 <div>
                   <label className="field-label block">requirement text</label>
                   <textarea
@@ -1151,7 +1212,9 @@ function RunRow({
 
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-3">
                 <p className="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
-                  Earlier agents stay complete — only this agent and the ones after it rerun.
+                  {isGate
+                    ? `This gate failed, so resuming regenerates the ${regenerateFrom} from your edited requirement.`
+                    : "Earlier agents stay complete — only this agent and the ones after it rerun."}
                 </p>
                 <button
                   onClick={onResume}
@@ -1159,7 +1222,11 @@ function RunRow({
                   className="press inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-md)] bg-[var(--accent)] px-3.5 py-2 text-[12.5px] font-semibold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-50"
                 >
                   <Icon name="runner" size={12} />
-                  {busy ? "Resuming…" : "Resume from here"}
+                  {busy
+                    ? "Resuming…"
+                    : isGate
+                      ? `Regenerate ${regenerateFrom}`
+                      : "Resume from here"}
                 </button>
               </div>
             </div>

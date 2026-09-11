@@ -600,24 +600,100 @@ def _build_framework(cases: list[dict], base_url: str) -> tuple[list[dict], dict
     return tests, root_files
 
 
+async def _ground_locators(
+    base_url: str, locators: list, runner_url: str, timeout: float
+) -> dict[str, bool] | None:
+    """Probe each locator against the live app via the runner's /inspect.
+
+    Returns element -> found, or None when the grounding pass could not run
+    (runner down). None is distinct from "nothing found": the caller must not
+    mistake an unreachable runner for a fully verified suite.
+    """
+    import httpx
+
+    if not locators:
+        return {}
+    hints = [{"element": loc.element, **loc.probe} for loc in locators]
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{runner_url.rstrip('/')}/inspect", json={"url": base_url, "hints": hints}
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception:  # noqa: BLE001 — grounding is best-effort, never fatal
+        return None
+
+    out: dict[str, bool] = {}
+    for hint in data.get("hints") or []:
+        if isinstance(hint, dict) and hint.get("element"):
+            out[str(hint["element"])] = bool(hint.get("found"))
+    return out
+
+
 async def _codegen(ctx: dict, **payload) -> dict:
     from ..core.settings import get_settings
+    from .locator_map import for_kit
 
+    settings = get_settings()
     cases: list[dict] = payload.get("cases", [])
-    base_url: str = str(payload.get("base_url") or get_settings().app_base_url)
+    base_url: str = str(payload.get("base_url") or settings.app_base_url)
     tests, root_files = _build_framework(cases, base_url)
 
+    kit = "saucedemo" if _is_saucedemo(base_url, cases) else "generic"
+    page_file = next((p for p in root_files if p.endswith(".page.ts") and "base.page" not in p), "")
+    locators = for_kit(kit, page_file)
+
+    # Ground the locators against the live app when the runner is available.
+    # A curated kit's selectors are already known-good against the real app, so
+    # they stay dom_verified when the probe cannot run; anything else is an
+    # honest unverified guess.
+    found = await _ground_locators(
+        base_url,
+        locators,
+        str(payload.get("runner_url") or settings.runner_url),
+        float(settings.inspect_timeout_s),
+    )
+
+    locator_entries: list[dict] = []
     counts: dict[str, int] = {}
-    for c in cases:
-        tier = str(c.get("grounding") or ("unverified" if not c.get("locators") else "dom_verified"))
+    for loc in locators:
+        if found is None:
+            tier = "dom_verified" if kit == "saucedemo" else "unverified"
+        else:
+            tier = "dom_verified" if found.get(loc.element) else "unverified"
         counts[tier] = counts.get(tier, 0) + 1
+        locator_entries.append(
+            {
+                "file": loc.file,
+                "property": loc.prop,
+                "element": loc.element,
+                "locator": loc.expr,
+                "probe": loc.probe,
+                "tier": tier,
+            }
+        )
+
+    total = len(locator_entries)
+    verified = counts.get("dom_verified", 0) + counts.get("run_verified", 0)
+    for tier in GROUNDING_TIERS:
+        counts.setdefault(tier, 0)
 
     return {
         "kind": "test_suite",
         "payload": {
             "files": {"tests": tests},
             "bundle": root_files,
-            "grounding_report": {"tiers": GROUNDING_TIERS, "counts": counts},
+            # The heal loop needs to know which locator belongs to which
+            # element, so it ships with the suite rather than being re-derived.
+            "locators": locator_entries,
+            "grounding_report": {
+                "tiers": GROUNDING_TIERS,
+                "counts": counts,
+                "probe": "ran" if found is not None else "skipped (runner unreachable)",
+                "verified": verified,
+                "total": total,
+            },
             "base_url": base_url,
             "total_cases": len(cases),
             "framework": "playwright-pom",

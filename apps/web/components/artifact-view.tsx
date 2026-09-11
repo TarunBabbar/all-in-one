@@ -373,8 +373,256 @@ function RunResultsView({ p }: { p: Unknown }) {
           </ul>
         </Section>
       )}
+      <SelfHealSection p={p} />
       <RawJson payload={p} />
     </div>
+  );
+}
+
+/**
+ * An eval gate's report: one row per metric, with the threshold it was measured
+ * against and why it failed. The reason text is the point of the view — a red
+ * score with no explanation is not actionable.
+ */
+function EvalReportView({ p }: { p: Unknown }) {
+  const metrics = asArr(p.metrics) ?? [];
+  const summary = asObj(p.summary) ?? {};
+  const passed = summary.passed as number | undefined;
+  const total = summary.total as number | undefined;
+  const gatePassed = p.passed === true;
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Stat label="metrics" value={total ?? metrics.length} />
+        {passed != null && (
+          <Stat label="passed" value={passed} tone={gatePassed ? "ok" : "bad"} />
+        )}
+        <Chip tone={gatePassed ? "ok" : "bad"}>
+          {gatePassed ? "gate passed" : "gate blocked"}
+        </Chip>
+        {asStr(p.engine) && <Chip tone="neutral">{asStr(p.engine)}</Chip>}
+      </div>
+
+      <Section title="Metrics">
+        <ul className="space-y-1.5">
+          {metrics.map((m, i) => {
+            const o = asObj(m) ?? {};
+            const ok = o.passed === true;
+            const score = asNum(o.score);
+            const threshold = asNum(o.threshold);
+            return (
+              <li
+                key={`${asStr(o.name)}-${i}`}
+                className={`rounded-[var(--r-sm)] border bg-[var(--bg)] px-3 py-2 ${
+                  ok ? "border-[var(--line)]" : "border-[var(--bad)]/35"
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    aria-hidden
+                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                      ok ? "bg-[var(--ok-soft)] text-[var(--ok)]" : "bg-[var(--bad-soft)] text-[var(--bad)]"
+                    }`}
+                  >
+                    {ok ? "✓" : "✕"}
+                  </span>
+                  <span className="text-[12.5px] font-semibold text-[var(--ink)]">
+                    {asStr(o.name)}
+                  </span>
+                  {score != null && (
+                    <span
+                      className="text-[11.5px] tabular-nums text-[var(--ink-soft)]"
+                      style={{ fontFamily: "var(--font-mono)" }}
+                    >
+                      {score.toFixed(2)}
+                      {threshold != null ? ` / ${threshold.toFixed(2)}` : ""}
+                    </span>
+                  )}
+                </div>
+                {asStr(o.reason) && (
+                  <p className="mt-1 pl-6 text-[11.5px] leading-relaxed text-[var(--ink-soft)]">
+                    {asStr(o.reason)}
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </Section>
+      <RawJson payload={p} />
+    </div>
+  );
+}
+
+/** The test plan: the criteria every downstream case must trace back to. */
+function PlanView({ p }: { p: Unknown }) {
+  const criteria = asArr(p.criteria) ?? [];
+  const assumptions = asArr(p.assumptions) ?? [];
+  const ambiguous = asArr(p.ambiguous) ?? [];
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Stat label="criteria" value={criteria.length} />
+        {asNum(p.total_cases) != null && <Stat label="cases" value={asNum(p.total_cases) ?? 0} />}
+      </div>
+
+      <Section title="Criteria">
+        <ul className="space-y-1.5">
+          {criteria.map((c, i) => {
+            const o = asObj(c) ?? {};
+            const cats = asArr(o.categories) ?? [];
+            return (
+              <li
+                key={asStr(o.id) || i}
+                className="rounded-[var(--r-sm)] border border-[var(--line)] bg-[var(--bg)] px-3 py-2"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className="text-[11px] font-bold text-[var(--accent)]"
+                    style={{ fontFamily: "var(--font-mono)" }}
+                  >
+                    {asStr(o.id)}
+                  </span>
+                  {cats.map((cat) => (
+                    <Chip key={asStr(cat)} tone="neutral">
+                      {asStr(cat)}
+                    </Chip>
+                  ))}
+                </div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-[var(--ink)]">
+                  {asStr(o.text)}
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      </Section>
+
+      {assumptions.length > 0 && (
+        <Section title="Assumptions">
+          <ul className="space-y-1">
+            {assumptions.map((a, i) => (
+              <li key={i} className="text-[12px] leading-relaxed text-[var(--ink-soft)]">
+                · {asStr(a)}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+      {ambiguous.length > 0 && (
+        <Section title="Ambiguities resolved">
+          <ul className="space-y-1">
+            {ambiguous.map((a, i) => (
+              <li key={i} className="text-[12px] leading-relaxed text-[var(--warn)]">
+                · {asStr(a)}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+      <RawJson payload={p} />
+    </div>
+  );
+}
+
+/**
+ * A run, including what the heal loop did. The attempt trail and the manual
+ * queue are first-class here: a suite that needed four attempts to pass is a
+ * different fact from one that passed first time.
+ */
+function SelfHealSection({ p }: { p: Unknown }) {
+  const attempts = asArr(p.attempts) ?? [];
+  const fixed = asArr(p.auto_fixed) ?? [];
+  const manual = asArr(p.manual_required) ?? [];
+  if (!attempts.length && !fixed.length && !manual.length) return null;
+
+  return (
+    <>
+      {attempts.length > 1 && (
+        <Section title={`Attempts (${attempts.length})`}>
+          <ul className="space-y-1">
+            {attempts.map((a, i) => {
+              const o = asObj(a) ?? {};
+              return (
+                <li
+                  key={i}
+                  className="flex items-center gap-2 text-[11.5px] text-[var(--ink-soft)]"
+                  style={{ fontFamily: "var(--font-mono)" }}
+                >
+                  <span className="text-[var(--ink-faint)]">#{asNum(o.attempt) ?? i + 1}</span>
+                  <span>{asNum(o.passed) ?? 0} passed</span>
+                  <span className={asNum(o.failed) ? "text-[var(--bad)]" : ""}>
+                    {asNum(o.failed) ?? 0} failed
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      )}
+
+      {fixed.length > 0 && (
+        <Section title={`Auto-repaired locators (${fixed.length})`}>
+          <ul className="space-y-1.5">
+            {fixed.map((f, i) => {
+              const o = asObj(f) ?? {};
+              return (
+                <li key={i} className="rounded-[var(--r-sm)] border border-[var(--ok)]/30 bg-[var(--ok-soft)] px-2.5 py-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[12px] font-semibold text-[var(--ink)]">
+                      {asStr(o.element)}
+                    </span>
+                    <Chip tone={o.method === "model" ? "warn" : "ok"}>
+                      {asStr(o.method) || "deterministic"}
+                    </Chip>
+                  </div>
+                  <p
+                    className="mt-1 break-all text-[10.5px] leading-relaxed text-[var(--ink-soft)]"
+                    style={{ fontFamily: "var(--font-mono)" }}
+                  >
+                    {asStr(o.old_locator)} → {asStr(o.new_locator)}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      )}
+
+      {manual.length > 0 && (
+        <Section title={`Needs a manual run (${manual.length})`}>
+          <ul className="space-y-1.5">
+            {manual.map((m, i) => {
+              const o = asObj(m) ?? {};
+              return (
+                <li
+                  key={i}
+                  className="rounded-[var(--r-sm)] border border-[var(--warn)]/35 bg-[var(--warn-soft)] px-2.5 py-1.5"
+                >
+                  <p className="text-[12px] font-semibold text-[var(--ink)]">
+                    {asStr(o.test)}
+                  </p>
+                  {asStr(o.file) && (
+                    <p
+                      className="mt-0.5 text-[10.5px] text-[var(--ink-faint)]"
+                      style={{ fontFamily: "var(--font-mono)" }}
+                    >
+                      {asStr(o.file)}
+                    </p>
+                  )}
+                  {asStr(o.reason) && (
+                    <p className="mt-0.5 text-[11.5px] text-[var(--ink-soft)]">
+                      {asStr(o.reason)}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      )}
+    </>
   );
 }
 
@@ -550,35 +798,141 @@ function ReleaseView({ p }: { p: Unknown }) {
   const evidence = asObj(p.evidence) ?? {};
   const checks = asObj(p.checks) ?? {};
   const criteria = asObj(p.criteria) ?? {};
+  const confidence = asObj(p.confidence) ?? {};
+  const selfHeal = asObj(p.self_heal) ?? {};
+  const gates = asArr(p.gates) ?? [];
+  const manual = asArr(p.manual_queue) ?? [];
   const stat = (k: string) => asNum(evidence[k]);
+  const confScore = asNum(confidence.score);
+
   return (
     <div>
       <div
-        className={`flex flex-col items-center rounded-xl border px-4 py-5 ${
-          go ? "border-[var(--ok)]/40 bg-[var(--ok)]/10" : "border-[var(--bad)]/40 bg-[var(--bad)]/10"
+        className={`flex flex-col items-center rounded-[var(--r-lg)] border px-4 py-5 ${
+          go ? "border-[var(--ok)]/40 bg-[var(--ok-soft)]" : "border-[var(--bad)]/40 bg-[var(--bad-soft)]"
         }`}
       >
-        <span className={`text-4xl font-extrabold tracking-tight ${go ? "text-[var(--ok)]" : "text-[var(--bad)]"}`}>{verdict}</span>
-        {reason && <p className="mt-2 max-w-xl text-center text-sm text-[var(--ink-soft)]">{reason}</p>}
+        <span
+          className={`text-[38px] font-bold leading-none tracking-tight ${go ? "text-[var(--ok)]" : "text-[var(--bad)]"}`}
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          {verdict.replace("_", "-")}
+        </span>
+        {reason && (
+          <p className="mt-2.5 max-w-xl text-center text-[12.5px] leading-relaxed text-[var(--ink-soft)]">
+            {reason}
+          </p>
+        )}
+        {confScore != null && (
+          <p
+            className="mt-2 text-[11.5px] text-[var(--ink-faint)]"
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            confidence {confScore}%
+          </p>
+        )}
       </div>
+
       <div className="mt-4 flex flex-wrap gap-2">
         {stat("total") != null && <Stat label="total" value={stat("total") ?? 0} />}
-        {stat("passed") != null && <Stat label="passed" value={stat("passed") ?? 0} strong />}
-        {stat("failed") != null && <Stat label="failed" value={stat("failed") ?? 0} />}
-        {stat("skipped") != null && <Stat label="skipped" value={stat("skipped") ?? 0} />}
+        {stat("passed") != null && <Stat label="passed" value={stat("passed") ?? 0} tone="ok" />}
+        {stat("failed") != null && (
+          <Stat label="failed" value={stat("failed") ?? 0} tone={stat("failed") ? "bad" : undefined} />
+        )}
         {stat("pass_percent") != null && <Stat label="pass %" value={`${stat("pass_percent") ?? 0}%`} />}
-        {stat("high_priority_failures") != null && <Stat label="high-prio fails" value={stat("high_priority_failures") ?? 0} />}
+        {asNum(selfHeal.auto_fixed) != null && asNum(selfHeal.auto_fixed)! > 0 && (
+          <Stat label="auto-repaired" value={asNum(selfHeal.auto_fixed) ?? 0} tone="warn" />
+        )}
+        {asNum(selfHeal.manual_required) != null && asNum(selfHeal.manual_required)! > 0 && (
+          <Stat label="manual" value={asNum(selfHeal.manual_required) ?? 0} tone="warn" />
+        )}
       </div>
+
+      {asStr(confidence.rationale) && (
+        <Section title="Confidence">
+          <p className="text-[12.5px] leading-relaxed text-[var(--ink-soft)]">
+            {asStr(confidence.rationale)}
+          </p>
+        </Section>
+      )}
+
+      {gates.length > 0 && (
+        <Section title="Eval gates">
+          <ul className="space-y-1">
+            {gates.map((g, i) => {
+              const o = asObj(g) ?? {};
+              const ok = o.passed === true;
+              const s = asObj(o.summary) ?? {};
+              return (
+                <li key={i} className="flex items-center gap-2 text-[12px]">
+                  <span
+                    aria-hidden
+                    className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+                      ok ? "bg-[var(--ok-soft)] text-[var(--ok)]" : "bg-[var(--bad-soft)] text-[var(--bad)]"
+                    }`}
+                  >
+                    {ok ? "✓" : "✕"}
+                  </span>
+                  <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--ink-soft)]">
+                    {asStr(o.gate)}
+                  </span>
+                  <span className="text-[var(--ink-faint)]">
+                    {asNum(s.passed) ?? 0}/{asNum(s.total) ?? 0} metrics
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      )}
+
+      {manual.length > 0 && (
+        <Section title={`Needs a manual run (${manual.length})`}>
+          <ul className="space-y-1.5">
+            {manual.map((m, i) => {
+              const o = asObj(m) ?? {};
+              return (
+                <li
+                  key={i}
+                  className="rounded-[var(--r-sm)] border border-[var(--warn)]/35 bg-[var(--warn-soft)] px-2.5 py-1.5"
+                >
+                  <p className="text-[12px] font-semibold text-[var(--ink)]">{asStr(o.test)}</p>
+                  {asStr(o.file) && (
+                    <p
+                      className="mt-0.5 text-[10.5px] text-[var(--ink-faint)]"
+                      style={{ fontFamily: "var(--font-mono)" }}
+                    >
+                      {asStr(o.file)}
+                    </p>
+                  )}
+                  {asStr(o.reason) && (
+                    <p className="mt-0.5 text-[11.5px] text-[var(--ink-soft)]">{asStr(o.reason)}</p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </Section>
+      )}
+
       {Object.keys(checks).length > 0 && (
         <Section title="Criteria checks">
           <ul className="space-y-1">
             {Object.entries(checks).map(([k, ok]) => (
-              <li key={k} className="flex items-center gap-2 text-sm">
-                <span className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-black ${ok ? "bg-[var(--ok)]/15 text-[var(--ok)]" : "bg-[var(--bad)]/10 text-[var(--bad)]"}`}>
+              <li key={k} className="flex items-center gap-2 text-[12px]">
+                <span
+                  className={`flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold ${
+                    ok ? "bg-[var(--ok-soft)] text-[var(--ok)]" : "bg-[var(--bad-soft)] text-[var(--bad)]"
+                  }`}
+                >
                   {ok ? "✓" : "✕"}
                 </span>
-                <span className="font-mono text-xs text-[var(--ink-soft)]">{k}</span>
-                {asNum(criteria[k]) != null && <span className="text-xs text-[var(--ink-faint)]">(threshold {asNum(criteria[k])})</span>}
+                <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--ink-soft)]">
+                  {k}
+                </span>
+                {asNum(criteria[k]) != null && (
+                  <span className="text-[var(--ink-faint)]">(threshold {asNum(criteria[k])})</span>
+                )}
               </li>
             ))}
           </ul>
@@ -662,6 +1016,33 @@ type Kind = { label: string; icon: IconName; note?: string };
 /** Name the artifact and surface its one most useful fact in the header, so a
  * collapsed stage still reads as a document rather than a blob. */
 function describe(p: Unknown): { kind: Kind; body: ReactNode } {
+  // eval gate — a metric table, checked before the document rules so a gate
+  // report can never be mistaken for one of the artifacts it scores
+  if (asStr(p.gate) && asArr(p.metrics)) {
+    const s = asObj(p.summary) ?? {};
+    const total = asNum(s.total) ?? (asArr(p.metrics) as unknown[]).length;
+    const passed = asNum(s.passed) ?? 0;
+    return {
+      kind: {
+        label: "Eval gate",
+        icon: "gate",
+        note: `${passed}/${total} metrics · ${p.passed ? "passed" : "blocked"}`,
+      },
+      body: <EvalReportView p={p} />,
+    };
+  }
+  // test plan — criteria every downstream case must trace to
+  if (asArr(p.criteria) && !asStr(p.verdict)) {
+    const n = (asArr(p.criteria) as unknown[]).length;
+    return {
+      kind: {
+        label: "Test plan",
+        icon: "plan",
+        note: `${n} criteria`,
+      },
+      body: <PlanView p={p} />,
+    };
+  }
   // release decision — verdict + evidence
   if (asStr(p.verdict) && (asStr(p.reason) || asObj(p.evidence))) {
     const verdict = asStr(p.verdict).replace("_", "-").toUpperCase();

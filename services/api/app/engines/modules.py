@@ -13,6 +13,7 @@ from . import (
     codegen,  # noqa: F401
     demo,  # noqa: F401
     etl,  # noqa: F401
+    eval_gate,  # noqa: F401
     executor,  # noqa: F401
     intake,  # noqa: F401
     leakage,  # noqa: F401
@@ -21,6 +22,7 @@ from . import (
     release_gate,  # noqa: F401
     requirement_doctor,  # noqa: F401
     test_cases,  # noqa: F401
+    test_plan,  # noqa: F401
     triage,  # noqa: F401
     visual,  # noqa: F401
 )

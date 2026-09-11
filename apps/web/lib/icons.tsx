@@ -13,6 +13,8 @@ export type IconName =
   | "pipeline"
   | "intake"
   | "doctor"
+  | "plan"
+  | "gate"
   | "cases"
   | "codegen"
   | "runner"
@@ -68,6 +70,23 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M11.5 7.5H21" />
       <path d="M11.5 13.5H21" />
       <path d="M11.5 19.5H21" />
+    </>
+  ),
+  // Document with a folded corner — a written plan
+  plan: (
+    <>
+      <path d="M13.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5Z" />
+      <path d="M13.5 3v5.5H19" />
+      <path d="M8.5 13h7" />
+      <path d="M8.5 16.5h4.5" />
+    </>
+  ),
+  // Gate — a check passing through a threshold
+  gate: (
+    <>
+      <path d="M4 6.5h16" />
+      <path d="M4 17.5h16" />
+      <path d="m8.5 11 2.5 2.5 4.5-5" />
     </>
   ),
   // Angle brackets + slash

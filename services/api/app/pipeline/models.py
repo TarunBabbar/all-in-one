@@ -30,20 +30,30 @@ class ApprovalState(StrEnum):
 class StageId(StrEnum):
     INTAKE = "intake"
     DOCTOR = "doctor"
+    TEST_PLAN = "test_plan"
+    EVAL_PLAN = "eval_plan"
     TEST_CASES = "test_cases"
+    EVAL_CASES = "eval_cases"
     CODEGEN = "codegen"
+    EVAL_CODE = "eval_code"
     RUN = "run"
     TRIAGE = "triage"
     VISUAL = "visual"
     RELEASE = "release"
 
 
-# Ordered pipeline definition (QAE2E RI->...->IQ spine).
+# Ordered pipeline definition. Each generator is followed by its eval gate, so
+# a weak artifact stops the chain at the gate that detected it rather than
+# propagating downstream. The gates are deterministic and cost no tokens.
 PIPELINE_STAGES: list[StageId] = [
     StageId.INTAKE,
     StageId.DOCTOR,
+    StageId.TEST_PLAN,
+    StageId.EVAL_PLAN,
     StageId.TEST_CASES,
+    StageId.EVAL_CASES,
     StageId.CODEGEN,
+    StageId.EVAL_CODE,
     StageId.RUN,
     StageId.TRIAGE,
     StageId.VISUAL,
@@ -53,6 +63,10 @@ PIPELINE_STAGES: list[StageId] = [
 # Visual stage is OPTIONAL: pipelines without screenshots skip it. Absent
 # optional stages never block advancement.
 SKIPPABLE_STAGES: set[StageId] = {StageId.VISUAL}
+
+# Eval gates: deterministic scoring stages. Listed here so the UI can render
+# them compactly (they produce a metric table, not a document).
+EVAL_STAGES: set[StageId] = {StageId.EVAL_PLAN, StageId.EVAL_CASES, StageId.EVAL_CODE}
 
 
 class Project(BaseModel):

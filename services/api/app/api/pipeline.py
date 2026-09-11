@@ -296,8 +296,12 @@ def _engine_for_stage(stage: StageId) -> str:
     return {
         StageId.INTAKE: "intake",
         StageId.DOCTOR: "requirement-doctor",
+        StageId.TEST_PLAN: "test-plan",
+        StageId.EVAL_PLAN: "eval-plan",
         StageId.TEST_CASES: "test-cases",
+        StageId.EVAL_CASES: "eval-cases",
         StageId.CODEGEN: "codegen",
+        StageId.EVAL_CODE: "eval-code",
         StageId.RUN: "executor",
         StageId.TRIAGE: "failure-triage",
         StageId.VISUAL: "visual",

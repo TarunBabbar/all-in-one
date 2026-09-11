@@ -13,6 +13,10 @@ dependencies = [
     "aiosqlite>=0.20",
     "httpx>=0.27",
     "python-multipart>=0.0.9",
+    # Eval gates. Used only for its BaseMetric / LLMTestCase contract — our
+    # metrics score deterministically (no LLM judge), so the gates run offline.
+    # Scores are higher-is-better since 4.2.2.
+    "deepeval>=4.2.2",
 ]
 
 [dependency-groups]

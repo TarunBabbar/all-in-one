@@ -18,6 +18,7 @@
  */
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -27,6 +28,9 @@ import { fileURLToPath } from "node:url";
 const PORT = Number(process.env.PORT ?? 8787);
 const WORKSPACE = process.env.RUNNER_WORKSPACE ?? join(tmpdir(), "qahub-runner-home");
 const PLAYWRIGHT_VERSION = "1.63.0";
+// Must stay under the API's per-attempt httpx timeout (RUNNER_CALL_TIMEOUT_S).
+const EXEC_TIMEOUT_MS = Number(process.env.RUNNER_EXEC_TIMEOUT_MS ?? 380_000);
+const NAV_TIMEOUT_MS = Number(process.env.RUNNER_NAV_TIMEOUT_MS ?? 45_000);
 const IS_WIN = process.platform === "win32";
 const APP_DIR = dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -215,7 +219,7 @@ async function runSuite(payload) {
     try {
       ({ stdout } = await execFileAsync(process.execPath, [install.cli, "test", "--reporter=json"], {
         cwd: dir,
-        timeout: 240_000,
+        timeout: EXEC_TIMEOUT_MS,
       }));
     } catch (e) {
       stdout = e.stdout || e.message || "";
@@ -300,6 +304,150 @@ function collectSpecs(report, baseDir) {
   return out;
 }
 
+// ---- DOM inspection (locator grounding + self-heal) ----
+
+/**
+ * Load playwright's API from the resolved install. `createRequire` scoped to
+ * the workspace resolves the package the same way the CLI would, without
+ * guessing its entry file.
+ */
+function requirePlaywright(install) {
+  const req = createRequire(join(install.nodeModules, "noop.js"));
+  return req("playwright");
+}
+
+/** Build a Playwright locator expression for a candidate, preferring the
+ * strategies the suite already uses (role -> testid -> placeholder -> text). */
+function locatorExprFor(cand) {
+  if (cand.role && cand.name) {
+    return `page.getByRole(${JSON.stringify(cand.role)}, { name: ${JSON.stringify(cand.name)} })`;
+  }
+  if (cand.testId) return `page.getByTestId(${JSON.stringify(cand.testId)})`;
+  if (cand.placeholder) return `page.getByPlaceholder(${JSON.stringify(cand.placeholder)})`;
+  if (cand.name) return `page.getByText(${JSON.stringify(cand.name)})`;
+  return "";
+}
+
+/** Does a hint currently resolve on the page? Structured probe only - never
+ * eval generated code. */
+async function hintFound(page, hint) {
+  try {
+    let loc;
+    if (hint.role && hint.name) loc = page.getByRole(hint.role, { name: hint.name, exact: true });
+    else if (hint.role) loc = page.getByRole(hint.role);
+    else if (hint.testid) loc = page.getByTestId(hint.testid);
+    else if (hint.placeholder) loc = page.getByPlaceholder(hint.placeholder);
+    else if (hint.css) loc = page.locator(hint.css);
+    else return false;
+    return (await loc.count()) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Sweep the live DOM for addressable elements (role + accessible name,
+ * test ids, placeholders). Bounded so a huge page cannot blow up the reply. */
+async function sweepCandidates(page) {
+  return page.evaluate(() => {
+    const implicitRole = (el) => {
+      const tag = el.tagName.toLowerCase();
+      if (tag === "button") return "button";
+      if (tag === "a") return el.getAttribute("href") ? "link" : null;
+      if (tag === "select") return "combobox";
+      if (tag === "textarea") return "textbox";
+      if (tag === "input") {
+        const t = (el.getAttribute("type") || "text").toLowerCase();
+        if (t === "submit" || t === "button") return "button";
+        if (t === "checkbox") return "checkbox";
+        if (t === "radio") return "radio";
+        return "textbox";
+      }
+      return el.getAttribute("role");
+    };
+    const nameOf = (el) =>
+      (
+        el.getAttribute("aria-label") ||
+        el.getAttribute("placeholder") ||
+        el.innerText ||
+        el.value ||
+        ""
+      )
+        .trim()
+        .replace(/\s+/g, " ")
+        .slice(0, 80);
+
+    const nodes = document.querySelectorAll(
+      "button, a, input, select, textarea, [role], [data-test], [data-testid]",
+    );
+    const seen = new Set();
+    const out = [];
+    for (const el of Array.from(nodes).slice(0, 500)) {
+      const role = implicitRole(el);
+      const name = nameOf(el);
+      const testId = el.getAttribute("data-test") || el.getAttribute("data-testid") || "";
+      const placeholder = el.getAttribute("placeholder") || "";
+      if (!name && !testId) continue;
+      const key = `${role || ""}|${name}|${testId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ role: role || null, name, testId, placeholder });
+    }
+    return out;
+  });
+}
+
+/**
+ * POST /inspect — { url, hints: [{element, role?, name?, placeholder?, testid?, css?}] }
+ *
+ * Opens the page once, resolves every hint against it, and returns the
+ * candidates that actually exist. The API uses this both to ground locators
+ * before a run and to re-map them after a failure.
+ */
+async function inspectPage(payload) {
+  const { url, hints = [] } = payload;
+  const install = await getInstall();
+  if (!install) throw new Error("no usable Playwright install found");
+
+  const { chromium } = requirePlaywright(install);
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    // Best-effort settle; a page that never goes idle must not fail the probe.
+    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => {});
+
+    const resolved = [];
+    for (const hint of hints) {
+      resolved.push({
+        element: hint.element ?? "",
+        found: await hintFound(page, hint),
+      });
+    }
+
+    let snapshot = "";
+    try {
+      snapshot = await page.locator("body").ariaSnapshot({ timeout: 10_000 });
+    } catch {
+      snapshot = "";
+    }
+
+    const candidates = (await sweepCandidates(page)).map((c) => ({
+      ...c,
+      locator: locatorExprFor(c),
+    }));
+
+    return {
+      url,
+      title: await page.title().catch(() => ""),
+      hints: resolved,
+      candidates,
+      aria_snapshot: typeof snapshot === "string" ? snapshot.slice(0, 20_000) : "",
+    };
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 async function linkNodeModules(dir, nodeModulesDir) {
   const nm = join(dir, "node_modules");
   await rm(nm, { recursive: true, force: true });
@@ -336,6 +484,17 @@ const server = createServer(async (req, res) => {
       sendJson(res, 200, result);
     } catch (e) {
       sendJson(res, 500, { error: "run_failed", message: (e.message || "").slice(0, 500) });
+    }
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/inspect") {
+    try {
+      const payload = await readBody(req);
+      const result = await inspectPage(payload);
+      sendJson(res, 200, result);
+    } catch (e) {
+      sendJson(res, 500, { error: "inspect_failed", message: (e.message || "").slice(0, 500) });
     }
     return;
   }

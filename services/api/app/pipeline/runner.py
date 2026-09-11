@@ -33,8 +33,12 @@ from ..pipeline.store import PipelineStore
 _ENGINE_FOR_STAGE: dict[StageId, str] = {
     StageId.INTAKE: "intake",
     StageId.DOCTOR: "requirement-doctor",
+    StageId.TEST_PLAN: "test-plan",
+    StageId.EVAL_PLAN: "eval-plan",
     StageId.TEST_CASES: "test-cases",
+    StageId.EVAL_CASES: "eval-cases",
     StageId.CODEGEN: "codegen",
+    StageId.EVAL_CODE: "eval-code",
     StageId.RUN: "executor",
     StageId.TRIAGE: "failure-triage",
     StageId.VISUAL: "visual",
@@ -126,16 +130,23 @@ def _artifact_from_result(project_id: str, stage: StageId, result: dict) -> Arti
 
 
 def _is_hard_failure(result: dict) -> bool:
-    """Engines that swallow operational errors into a success-shaped payload.
+    """Engines that report failure inside a success-shaped payload.
 
-    The executor returns `runner_unreachable` / empty-files results instead of
-    raising; under automation those must stop the chain so a user can fix the
-    runner URL and resume.
+    Two shapes count:
+      - engines that swallow operational errors into `error` (the executor
+        returns `runner_unreachable` rather than raising);
+      - an eval gate that measured the artifact and found it wanting
+        (`kind == "eval_report"` with `passed: False`).
+
+    Both must stop the chain so a user can fix the input and resume, rather
+    than a weak artifact flowing downstream into automation.
     """
     payload = result.get("payload", {}) or {}
     if payload.get("runner_unreachable"):
         return True
     if payload.get("error"):
+        return True
+    if result.get("kind") == "eval_report" and not payload.get("passed", True):
         return True
     return False
 
@@ -149,6 +160,14 @@ def _failure_message(stage: StageId, result: dict) -> str:
         return (
             f"Runner unreachable at {runner}{detail}. Start the runner (or edit "
             "the runner URL) then resume from this stage."
+        )
+    if result.get("kind") == "eval_report" and not payload.get("passed", True):
+        summary = payload.get("summary") or {}
+        failed = summary.get("failed_metrics") or []
+        names = ", ".join(str(f) for f in failed) or "one or more metrics"
+        return (
+            f"Eval gate failed on {names}. Fix the input for the stage this gate "
+            "checks, then resume."
         )
     return str(payload.get("error") or f"{stage.value} stage failed")
 
@@ -332,6 +351,12 @@ def _summarize(stage: StageId, payload: dict) -> str:
         if stage == StageId.DOCTOR:
             score = (payload.get("diagnosis") or {}).get("quality_score")
             return f"quality score {score}/100" if score is not None else "diagnosis complete"
+        if stage == StageId.TEST_PLAN:
+            n = (payload.get("summary") or {}).get("total_criteria")
+            return f"{n} criteria planned" if n is not None else "plan complete"
+        if stage in (StageId.EVAL_PLAN, StageId.EVAL_CASES, StageId.EVAL_CODE):
+            s = payload.get("summary") or {}
+            return f"{s.get('passed', 0)}/{s.get('total', 0)} metrics passed"
         if stage == StageId.TEST_CASES:
             return f"{payload.get('count', 0)} test cases"
         if stage == StageId.CODEGEN:

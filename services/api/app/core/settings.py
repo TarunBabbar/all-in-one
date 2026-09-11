@@ -34,6 +34,29 @@ class Settings(BaseSettings):
     # the executor (run stage), and the pipeline input resolver.
     app_base_url: str = "http://localhost:3000"
 
+    # --- Run limits -------------------------------------------------------
+    # One heal attempt is a full Playwright run, so it gets its own generous
+    # timeout rather than sharing one timer across the whole loop.
+    # What the API waits for a single runner /run call (seconds).
+    runner_call_timeout_s: float = 420.0
+    # What the API waits for a single runner /inspect call (seconds).
+    inspect_timeout_s: float = 90.0
+    # How many times the executor may heal + rerun a failing suite.
+    max_heal_attempts: int = 5
+    # Hard ceiling for one run stage so a loop cannot spin forever (seconds).
+    stage_budget_s: float = 1800.0
+
+    # --- Test case generation --------------------------------------------
+    # Cases are coverage-driven (one per criterion per category), not a fixed
+    # number. This is a safety cap so a verbose requirement cannot produce an
+    # unbounded suite; raise it freely.
+    max_test_cases: int = 120
+
+    # --- DeepEval ---------------------------------------------------------
+    # Metrics are fully deterministic (no LLM judge), so the eval gates run
+    # offline. Set DEEPEVAL_TELEMETRY_OPT_OUT=1 to keep results local.
+    deepeval_enabled: bool = True
+
     # --- Jira (REST, pattern from jira-qa-crew-next) ---
     jira_url: str = ""
     jira_email: str = ""
