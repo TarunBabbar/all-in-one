@@ -4,8 +4,8 @@ import { Badge } from "@/components/badge";
 import { Icon } from "@/lib/icons";
 import { API_URL, type Project } from "@/lib/api";
 import { engineDescription, engineName, getEngineCatalog } from "@/lib/engine-catalog";
-import { CHAIN_STAGES } from "@/lib/stages";
-import { PIPELINE, TOOL_GROUPS } from "@/lib/tools";
+import { CHAIN_STAGES, chainOnlyStages } from "@/lib/stages";
+import { PIPELINE, TOOL_GROUPS, TOOLS } from "@/lib/tools";
 
 async function getProjects(): Promise<Project[]> {
   try {
@@ -33,6 +33,9 @@ function relativeTime(iso: string): string {
 
 export default async function Home() {
   const [projects, catalog] = await Promise.all([getProjects(), getEngineCatalog()]);
+  // Engines with a standalone page are the ones the nav lists; anything else
+  // the chain runs is pipeline-only and surfaced separately below.
+  const chainOnly = chainOnlyStages(new Set(TOOLS.map((t) => t.id)));
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -264,6 +267,45 @@ export default async function Home() {
               </ul>
             </div>
           ))}
+
+          {/* Pipeline-only engines. They have no standalone page by design —
+              the plan generator and the three checks need a preceding artifact
+              to work from — so they are listed here, marked, rather than being
+              indistinguishable from something that was forgotten. */}
+          {chainOnly.length > 0 && (
+            <div>
+              <p className="field-label mb-2 border-b border-[var(--line)] pb-2">
+                pipeline only
+              </p>
+              <ul>
+                {chainOnly.map((stage) => (
+                  <li key={stage.stage}>
+                    <Link
+                      href={PIPELINE.href}
+                      className="group flex items-center gap-2.5 rounded-[var(--r-md)] border border-transparent px-2.5 py-2 transition-colors hover:border-[var(--line)] hover:bg-[var(--bg-elev)]"
+                    >
+                      <Icon
+                        name={stage.icon}
+                        size={16}
+                        className="shrink-0 text-[var(--ink-faint)] transition-colors group-hover:text-[var(--accent)]"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-[13.5px] font-medium leading-tight text-[var(--ink)]">
+                            {engineName(catalog, stage.engine)}
+                          </span>
+                          <Badge tone="neutral">in pipeline</Badge>
+                        </span>
+                        <span className="mt-0.5 block truncate text-[11.5px] leading-tight text-[var(--ink-faint)]">
+                          {engineDescription(catalog, stage.engine)}
+                        </span>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </section>
     </div>

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/badge";
+import { ThemeSwitcher } from "@/components/theme-switcher";
 import {
   getSettings,
   saveSettings,
@@ -172,100 +173,117 @@ export default function SettingsPage() {
     }
   };
 
-  if (!loaded) {
-    return (
-      <div className="mx-auto max-w-[900px]">
-        <div className="h-6 w-28 animate-pulse rounded-[6px] bg-[var(--bg-elev)]" />
-        <div className="mb-7 mt-3 h-9 w-52 animate-pulse rounded-[8px] bg-[var(--bg-elev)]" />
-        <div className="space-y-5">
-          <div className="h-56 animate-pulse rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]" />
-          <div className="h-56 animate-pulse rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]" />
-        </div>
-      </div>
-    );
-  }
-
+  // Only the connector cards wait on the settings fetch. Appearance is a local
+  // preference with nothing to load, so gating it behind a network round-trip
+  // would make the theme picker appear late for no reason.
   return (
     <div className="mx-auto max-w-[900px]">
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge tone="accent" dot>
-          Settings
+          Configuration
         </Badge>
       </div>
 
       <h1 className="text-[30px] font-semibold leading-tight text-[var(--ink)]">
-        Connections
+        Settings
       </h1>
       <p className="mb-7 mt-2.5 max-w-[62ch] text-[14px] leading-relaxed text-[var(--ink-soft)]">
-        Store your Jira and GitHub credentials so the platform can pull
-        requirements and push code. Secrets are masked on read.
+        Choose how the workspace looks, and store your Jira and GitHub
+        credentials so the platform can pull requirements and push code.
+        Secrets are masked on read.
       </p>
 
       <div className="space-y-5">
-        <ConnectorCard
-          title="Jira"
-          icon="intake"
-          fields={[
-            { key: "url", label: "Jira URL" },
-            { key: "email", label: "Email" },
-            { key: "api_token", label: "API token", type: "password" },
-          ]}
-          values={jira}
-          onChange={setJiraField}
-          onTest={() => runTest("jira")}
-          test={jiraTest}
-        />
-
-        <ConnectorCard
-          title="GitHub"
-          icon="link"
-          fields={[
-            { key: "token", label: "Personal access token", type: "password" },
-            { key: "repo", label: "Repo (owner/repo)" },
-            { key: "branch", label: "Branch" },
-          ]}
-          values={github}
-          onChange={setGithubField}
-          onTest={() => runTest("github")}
-          test={githubTest}
-        />
-
-        <button
-          onClick={save}
-          disabled={saving}
-          className="press inline-flex items-center gap-1.5 rounded-[var(--r-md)] bg-[var(--accent)] px-5 py-2.5 text-[13px] font-semibold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-50"
-        >
-          <Icon name={saving ? "clock" : "check"} size={13} />
-          {saving ? "Saving…" : "Save settings"}
-        </button>
-
-        {/* Same shape as the connector test result, so feedback reads the same
-            way wherever it appears. */}
-        {(saveState.status === "ok" || saveState.status === "error") && (
-          <div
-            className={`qa-fade flex flex-wrap items-center gap-2 rounded-[var(--r-md)] border px-3 py-2.5 ${
-              saveState.status === "ok"
-                ? "border-[var(--ok)]/30 bg-[var(--ok-soft)]"
-                : "border-[var(--bad)]/30 bg-[var(--bad-soft)]"
-            }`}
-          >
-            <Badge tone={saveState.status === "ok" ? "ok" : "bad"} dot>
-              {saveState.status === "ok" ? "saved" : "save failed"}
-            </Badge>
-            <span className="min-w-0 flex-1 text-[12px] leading-relaxed text-[var(--ink-soft)]">
-              {saveState.message}
+        <section className="overflow-hidden rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
+            <h2 className="flex items-center gap-2 text-[14px] font-semibold text-[var(--ink)]">
+              <Icon name="visual" size={15} className="text-[var(--ink-soft)]" />
+              Appearance
+            </h2>
+            <span className="text-[11.5px] text-[var(--ink-faint)]">
+              Saved on this device
             </span>
           </div>
-        )}
+          <div className="px-5 py-4">
+            <ThemeSwitcher />
+          </div>
+        </section>
 
-        <p className="text-[12px] leading-relaxed text-[var(--ink-faint)]">
-          Saved values live in the app database and seed from{" "}
-          <code className="rounded-[3px] bg-[var(--bg-sunken)] px-1.5 py-0.5 text-[11px] text-[var(--ink-soft)]">
-            services/api/.env
-          </code>{" "}
-          on first run. A field showing {MASK} keeps its stored secret when you
-          save.
-        </p>
+        {!loaded ? (
+          <>
+            <div className="h-56 animate-pulse rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]" />
+            <div className="h-56 animate-pulse rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]" />
+          </>
+        ) : (
+          <>
+            <ConnectorCard
+              title="Jira"
+              icon="intake"
+              fields={[
+                { key: "url", label: "Jira URL" },
+                { key: "email", label: "Email" },
+                { key: "api_token", label: "API token", type: "password" },
+              ]}
+              values={jira}
+              onChange={setJiraField}
+              onTest={() => runTest("jira")}
+              test={jiraTest}
+            />
+
+            <ConnectorCard
+              title="GitHub"
+              icon="link"
+              fields={[
+                { key: "token", label: "Personal access token", type: "password" },
+                { key: "repo", label: "Repo (owner/repo)" },
+                { key: "branch", label: "Branch" },
+              ]}
+              values={github}
+              onChange={setGithubField}
+              onTest={() => runTest("github")}
+              test={githubTest}
+            />
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={save}
+                disabled={saving}
+                className="press inline-flex items-center gap-1.5 rounded-[var(--r-md)] bg-[var(--accent)] px-5 py-2.5 text-[13px] font-semibold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-50"
+              >
+                <Icon name={saving ? "clock" : "check"} size={13} />
+                {saving ? "Saving…" : "Save settings"}
+              </button>
+
+              {/* Same shape as the connector test result, so feedback reads the
+                  same way wherever it appears. */}
+              {(saveState.status === "ok" || saveState.status === "error") && (
+                <div
+                  className={`qa-fade flex flex-wrap items-center gap-2 rounded-[var(--r-md)] border px-3 py-2.5 ${
+                    saveState.status === "ok"
+                      ? "border-[var(--ok)]/30 bg-[var(--ok-soft)]"
+                      : "border-[var(--bad)]/30 bg-[var(--bad-soft)]"
+                  }`}
+                >
+                  <Badge tone={saveState.status === "ok" ? "ok" : "bad"} dot>
+                    {saveState.status === "ok" ? "saved" : "save failed"}
+                  </Badge>
+                  <span className="min-w-0 flex-1 text-[12px] leading-relaxed text-[var(--ink-soft)]">
+                    {saveState.message}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <p className="text-[12px] leading-relaxed text-[var(--ink-faint)]">
+              Saved values live in the app database and seed from{" "}
+              <code className="rounded-[3px] bg-[var(--bg-sunken)] px-1.5 py-0.5 text-[11px] text-[var(--ink-soft)]">
+                services/api/.env
+              </code>{" "}
+              on first run. A field showing {MASK} keeps its stored secret when
+              you save.
+            </p>
+          </>
+        )}
       </div>
     </div>
   );

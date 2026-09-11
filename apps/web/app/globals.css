@@ -77,6 +77,159 @@
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* ---------------------------------------------------------------------------
+   Themes
+
+   Each block below redefines every colour, shadow and focus token from :root.
+   Radii, fonts and motion are deliberately absent — they are geometry, not
+   identity, and must not shift when the theme changes.
+
+   The default dark theme is plain :root, so it needs no attribute and a user
+   who never opens Settings is unaffected by any of this.
+--------------------------------------------------------------------------- */
+
+/* paper — warm light. Ink and status colours are darkened so they clear 4.5:1
+   against a near-white surface, and shadows are softened because a shadow that
+   reads as depth on black reads as a smudge on cream. */
+html[data-theme="paper"] {
+  --bg: #f7f5f0;
+  --bg-elev: #ffffff;
+  --bg-sunken: #efece4;
+  --bg-inset: #f1eee7;
+  --bg-hover: #e9e5db;
+  --bg-hover-elev: #f3f0e9;
+
+  --ink: #1c1a17;
+  --ink-soft: #55504a;
+  --ink-faint: #6b665e;
+
+  --line: #e2ddd2;
+  --line-soft: #ece8df;
+  --line-strong: #c9c2b4;
+
+  /* Accent darkens rather than brightens on hover: on a light surface,
+     contrast is gained by going deeper, not lighter. */
+  --accent: #5b4fd6;
+  --accent-strong: #4a3ec0;
+  --accent-dim: #7a70e0;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(91, 79, 214, 0.09);
+  --accent-soft-2: rgba(91, 79, 214, 0.16);
+  --accent-line: rgba(91, 79, 214, 0.32);
+
+  --ok: #1f7a4d;
+  --ok-soft: rgba(31, 122, 77, 0.12);
+  --warn: #8a5a00;
+  --warn-soft: rgba(138, 90, 0, 0.12);
+  --bad: #c0392b;
+  --bad-soft: rgba(192, 57, 43, 0.1);
+  --pending: #b3aca0;
+  --pending-soft: rgba(179, 172, 160, 0.18);
+  --info: #2f6fb5;
+  --info-soft: rgba(47, 111, 181, 0.12);
+
+  --focus: #5b4fd6;
+  --focus-ring: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--focus);
+
+  --shadow-xs: 0 1px 1px rgba(60, 48, 30, 0.05);
+  --shadow-sm: 0 1px 2px rgba(60, 48, 30, 0.07), 0 1px 1px rgba(60, 48, 30, 0.04);
+  --shadow-md: 0 4px 12px -3px rgba(60, 48, 30, 0.12);
+  --shadow-lg: 0 12px 28px -8px rgba(60, 48, 30, 0.18);
+}
+
+/* nord — a cool dark theme on the Nord palette. The accent is frost cyan
+   rather than indigo, and status colours come from the aurora set. */
+html[data-theme="nord"] {
+  --bg: #2e3440;
+  --bg-elev: #3b4252;
+  --bg-sunken: #353b49;
+  --bg-inset: #292e39;
+  --bg-hover: #434c5e;
+  --bg-hover-elev: #434c5e;
+
+  --ink: #eceff4;
+  --ink-soft: #b8c0cf;
+  --ink-faint: #8d99ab;
+
+  --line: #434c5e;
+  --line-soft: #3b4252;
+  --line-strong: #4c566a;
+
+  --accent: #88c0d0;
+  --accent-strong: #9ed4e2;
+  --accent-dim: #5e81ac;
+  --accent-ink: #2e3440;
+  --accent-soft: rgba(136, 192, 208, 0.14);
+  --accent-soft-2: rgba(136, 192, 208, 0.22);
+  --accent-line: rgba(136, 192, 208, 0.38);
+
+  --ok: #a3be8c;
+  --ok-soft: rgba(163, 190, 140, 0.15);
+  --warn: #ebcb8b;
+  --warn-soft: rgba(235, 203, 139, 0.15);
+  --bad: #bf616a;
+  --bad-soft: rgba(191, 97, 106, 0.18);
+  --pending: #4c566a;
+  --pending-soft: rgba(76, 86, 106, 0.24);
+  --info: #81a1c1;
+  --info-soft: rgba(129, 161, 193, 0.15);
+
+  --focus: #88c0d0;
+  --focus-ring: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--focus);
+
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.24);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px -3px rgba(0, 0, 0, 0.42);
+  --shadow-lg: 0 12px 28px -8px rgba(0, 0, 0, 0.55);
+}
+
+/* contrast — maximum legibility. Near-black canvas, pure-white ink, lighter
+   hairlines so structure survives without relying on shadow, and brightened
+   status colours that stay distinguishable at low brightness. */
+html[data-theme="contrast"] {
+  --bg: #000000;
+  --bg-elev: #0d0d10;
+  --bg-sunken: #16161a;
+  --bg-inset: #050507;
+  --bg-hover: #232329;
+  --bg-hover-elev: #232329;
+
+  --ink: #ffffff;
+  --ink-soft: #d4d4d8;
+  --ink-faint: #a1a1aa;
+
+  --line: #52525b;
+  --line-soft: #27272a;
+  --line-strong: #a1a1aa;
+
+  --accent: #a5b4ff;
+  --accent-strong: #c9d2ff;
+  --accent-dim: #7c7cff;
+  --accent-ink: #000000;
+  --accent-soft: rgba(165, 180, 255, 0.18);
+  --accent-soft-2: rgba(165, 180, 255, 0.28);
+  --accent-line: rgba(165, 180, 255, 0.55);
+
+  --ok: #4ade80;
+  --ok-soft: rgba(74, 222, 128, 0.16);
+  --warn: #fde047;
+  --warn-soft: rgba(253, 224, 71, 0.16);
+  --bad: #f87171;
+  --bad-soft: rgba(248, 113, 113, 0.18);
+  --pending: #a1a1aa;
+  --pending-soft: rgba(161, 161, 170, 0.24);
+  --info: #7dd3fc;
+  --info-soft: rgba(125, 211, 252, 0.16);
+
+  --focus: #a5b4ff;
+  --focus-ring: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--focus);
+
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.7);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.75);
+  --shadow-md: 0 4px 12px -3px rgba(0, 0, 0, 0.85);
+  --shadow-lg: 0 12px 28px -8px rgba(0, 0, 0, 0.9);
+}
+
 * {
   border-color: var(--line);
 }
@@ -88,6 +241,17 @@ body {
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Theme switches fade rather than snap. Scoped to the two root elements and to
+   colour properties only: transitioning `*` would fight every existing
+   transition in the app, and transitioning anything but colour would cost
+   layout. */
+html,
+body {
+  transition:
+    background-color 220ms var(--ease-out),
+    color 220ms var(--ease-out);
 }
 
 body {

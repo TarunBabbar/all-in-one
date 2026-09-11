@@ -27,3 +27,6 @@ blob-report/
 # Design reference samples (local only — not product code)
 qa-pipeline-redesign.html
 *-redesign.html
+
+# Downloaded bundles and archives
+*.zip

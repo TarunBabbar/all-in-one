@@ -67,3 +67,16 @@ export function resumeTarget(stage: string): StageId {
 export function stageDef(stage: string): StageDef | undefined {
   return ALL_STAGES.find((s) => s.stage === stage);
 }
+
+/**
+ * Engines the chain runs but that have no standalone page.
+ *
+ * Four stages (the plan generator and the three checks) only make sense with a
+ * preceding artifact to work from, so there is no `/tools/...` route for them.
+ * That is a deliberate design, but it was previously invisible: they simply
+ * were not in the tool index, indistinguishable from something forgotten. The
+ * caller renders them explicitly, marked as pipeline-only.
+ */
+export function chainOnlyStages(standaloneIds: ReadonlySet<string>): StageDef[] {
+  return CHAIN_STAGES.filter((s) => !standaloneIds.has(s.engine));
+}
