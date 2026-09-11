@@ -11,6 +11,11 @@
 --------------------------------------------------------------------------- */
 
 :root {
+  /* Tells the browser how to render native UI it draws itself — scrollbars,
+     checkbox and radio borders, select popups, the <dialog> backdrop. Without
+     it a light theme keeps dark native controls. */
+  color-scheme: dark;
+
   /* Surfaces — four steps, darkest to lightest */
   --bg: #0b0e13;            /* page */
   --bg-elev: #12161d;       /* cards, sidebar */
@@ -92,6 +97,8 @@
    against a near-white surface, and shadows are softened because a shadow that
    reads as depth on black reads as a smudge on cream. */
 html[data-theme="paper"] {
+  color-scheme: light;
+
   --bg: #f7f5f0;
   --bg-elev: #ffffff;
   --bg-sunken: #efece4;
@@ -140,6 +147,8 @@ html[data-theme="paper"] {
 /* nord — a cool dark theme on the Nord palette. The accent is frost cyan
    rather than indigo, and status colours come from the aurora set. */
 html[data-theme="nord"] {
+  color-scheme: dark;
+
   --bg: #2e3440;
   --bg-elev: #3b4252;
   --bg-sunken: #353b49;
@@ -187,6 +196,8 @@ html[data-theme="nord"] {
    hairlines so structure survives without relying on shadow, and brightened
    status colours that stay distinguishable at low brightness. */
 html[data-theme="contrast"] {
+  color-scheme: dark;
+
   --bg: #000000;
   --bg-elev: #0d0d10;
   --bg-sunken: #16161a;

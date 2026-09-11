@@ -14,10 +14,23 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         {/* Must run before first paint. A saved theme applied in an effect
-            would arrive a frame late and flash the default. */}
+            would arrive a frame late and flash the default — the thing this
+            exists to prevent.
+
+            It writes data-theme onto <html>, which the server HTML cannot have:
+            the server has no idea which theme this browser chose. React reports
+            that as a hydration mismatch, so <html> carries
+            suppressHydrationWarning — the difference is the intended design,
+            not state that failed to reconcile.
+
+            The alternative is a cookie, so the server can render the attribute
+            itself and there is no difference to suppress. That is cleaner in
+            principle, but reading a cookie in the root layout opts every route
+            out of static rendering, which is a real cost to pay for one
+            cosmetic attribute. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link

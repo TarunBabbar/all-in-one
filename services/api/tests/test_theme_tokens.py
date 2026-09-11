@@ -95,3 +95,31 @@ def test_default_theme_is_not_behind_an_attribute(css: str) -> None:
     unaffected. A `data-theme="dark"` block would mean the default only applies
     once JS has run."""
     assert 'html[data-theme="dark"]' not in css
+
+
+def test_root_and_every_theme_declare_a_color_scheme(css: str) -> None:
+    """`color-scheme` governs the native UI the browser draws itself: scrollbars,
+    checkbox and radio borders, select popups, the <dialog> backdrop. Omitting it
+    leaves a light theme with dark native controls — visible, and easy to miss
+    because it only shows up on the few controls that are not fully restyled.
+    """
+    blocks = {
+        "root": _block(css, ":root"),
+        **{
+            theme: _block(css, f'html[data-theme="{theme}"]')
+            for theme in sorted(REQUIRED_THEMES)
+        },
+    }
+    for name, block in blocks.items():
+        match = re.search(r"color-scheme\s*:\s*(\w+)", block)
+        assert match, f"{name} declares no color-scheme"
+        assert match.group(1) in ("light", "dark"), f"{name} has a bad color-scheme"
+
+
+def test_light_theme_is_marked_as_light(css: str) -> None:
+    """The one that actually matters: Paper must not claim to be dark."""
+    paper = _block(css, 'html[data-theme="paper"]')
+    assert re.search(r"color-scheme\s*:\s*light", paper), (
+        "the light theme declares color-scheme: dark, so native controls would "
+        "render dark on a light surface"
+    )
