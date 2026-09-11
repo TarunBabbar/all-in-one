@@ -11,6 +11,12 @@ fixes the input rather than shipping a weak artifact downstream.
 
 The metrics live in `app/eval/` and involve no model, so these stages run in
 the normal chain without costing a token and without a network call.
+
+Engine ids are hyphenated (the engine-registry convention), while the gate names
+the metric layer uses are underscored (they mirror the stage ids). `GATE_FOR_ENGINE`
+is the single place that mapping is written down, so a gate can never be looked
+up under a name that has no metrics — a miss that used to make every gate report
+"0 metrics" while still passing.
 """
 
 from __future__ import annotations
@@ -21,11 +27,18 @@ from typing import Any
 from ..eval import build_gate_input, run_gate
 from ..pipeline.registry import Engine, register
 
+# engine id -> canonical gate name (see app/eval/metrics.py)
+GATE_FOR_ENGINE: dict[str, str] = {
+    "eval-plan": "eval_plan",
+    "eval-cases": "eval_cases",
+    "eval-code": "eval_code",
+}
+
 # Which upstream artifacts each gate measures.
 _REQUIRES: dict[str, tuple[str, ...]] = {
-    "eval-plan": ("requirement", "plan"),
-    "eval-cases": ("requirement", "plan", "cases"),
-    "eval-code": ("requirement", "plan", "cases", "code"),
+    "eval_plan": ("requirement", "plan"),
+    "eval_cases": ("requirement", "plan", "cases"),
+    "eval_code": ("requirement", "plan", "cases", "code"),
 }
 
 _TITLES: dict[str, str] = {
@@ -36,17 +49,18 @@ _TITLES: dict[str, str] = {
 
 
 def _make_runner(engine_id: str) -> Callable[..., Awaitable[dict[str, Any]]]:
-    needs = _REQUIRES[engine_id]
+    gate = GATE_FOR_ENGINE[engine_id]
+    needs = _REQUIRES[gate]
 
     async def _run(ctx: dict, **payload) -> dict:
         data = build_gate_input(
-            engine_id,
+            gate,
             requirement=str(payload.get("requirement") or payload.get("text") or ""),
             plan=payload.get("plan") or {},
             cases=payload.get("cases") or [],
             code=payload.get("code") or {},
         )
-        report = run_gate(engine_id, data)
+        report = run_gate(gate, data)
 
         # A gate with nothing to measure is not a pass — say so explicitly
         # rather than reporting a green tick over an empty input.

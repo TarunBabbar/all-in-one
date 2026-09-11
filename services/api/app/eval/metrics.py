@@ -528,7 +528,19 @@ class CaseCoverageMetric(QAMetric):
 
 
 class GroundingTierMetric(QAMetric):
-    """Locators should be verified against a DOM, not guessed."""
+    """Locators should be verified against a DOM, not guessed.
+
+    Three distinct states, deliberately not collapsed into one score:
+
+      no grounding report      -> fail. codegen did not do its job.
+      probe ran                -> score by the verified ratio.
+      probe could not run      -> pass with an explicit note. We did not check,
+                                  which is not the same as checking and finding
+                                  it bad; the run stage verifies for real.
+
+    Collapsing "could not check" into a failure would make the pipeline
+    unrunnable wherever the runner is not up, which is most of development.
+    """
 
     gate = "eval_code"
 
@@ -539,18 +551,36 @@ class GroundingTierMetric(QAMetric):
         data = payload_of(test_case)
         code = data.get("code") or {}
         report = code.get("grounding_report") or {}
-        counts = report.get("counts") or {}
-        total = sum(v for v in counts.values() if isinstance(v, int))
-        if total <= 0:
+        if not report:
             return self._finish(
                 0.0,
                 "no grounding report was produced, so locator quality is unknown",
                 [{"reason": "missing grounding_report"}],
             )
+
+        counts = report.get("counts") or {}
+        total = sum(v for v in counts.values() if isinstance(v, int))
+        if total <= 0:
+            return self._finish(
+                0.0,
+                "the grounding report listed no locators",
+                [{"reason": "empty grounding_report"}],
+            )
+
         verified = sum(
             v for k, v in counts.items()
             if k in ("dom_verified", "run_verified") and isinstance(v, int)
         )
+
+        if str(report.get("probe", "")).startswith("skipped") or report.get("skipped"):
+            note = report.get("probe_note") or "runner unavailable"
+            return self._finish(
+                1.0,
+                f"grounding did not run ({note}), so all {total} locators are "
+                "unverified — verified for real at run time",
+                [{"skipped": True, "unverified_locators": total, "total": total}],
+            )
+
         score = verified / total
         unverified = total - verified
         reason = (
@@ -638,6 +668,18 @@ class SpecMappingMetric(QAMetric):
 # registry
 # --------------------------------------------------------------------------- #
 
+# Gate names, declared once. Stage ids use underscores (StageId.EVAL_PLAN) while
+# engine ids use hyphens (the engine-registry convention, e.g. "test-cases"),
+# so a gate name arrives in either form. Normalizing here removes the whole
+# class of bug where a lookup silently misses and the gate measures nothing.
+GATE_NAMES = ("eval_plan", "eval_cases", "eval_code")
+
+
+def canonical_gate(gate: str) -> str:
+    """Accept `eval-plan` or `eval_plan` and return the canonical form."""
+    return (gate or "").strip().replace("-", "_")
+
+
 _GATES: dict[str, list[type[QAMetric]]] = {
     "eval_plan": [
         CriteriaCoverageMetric,
@@ -665,9 +707,13 @@ def gates() -> list[str]:
     return list(_GATES)
 
 
+def is_known_gate(gate: str) -> bool:
+    return canonical_gate(gate) in _GATES
+
+
 def metrics_for(gate: str) -> list[QAMetric]:
     """Fresh metric instances for a gate (metrics hold state when measured)."""
-    return [cls() for cls in _GATES.get(gate, [])]
+    return [cls() for cls in _GATES.get(canonical_gate(gate), [])]
 
 
 def build_test_case(gate: str, data: dict) -> LLMTestCase:
@@ -680,7 +726,7 @@ def build_test_case(gate: str, data: dict) -> LLMTestCase:
         "eval_plan": "Does this test plan cover the requirement without inventing scope?",
         "eval_cases": "Do these test cases conform to the plan and the requirement?",
         "eval_code": "Does the generated suite cover the cases and run as a real framework?",
-    }.get(gate, gate)
+    }.get(canonical_gate(gate), gate)
     return LLMTestCase(
         input=s(data.get("requirement")) or question,
         actual_output=flatten(

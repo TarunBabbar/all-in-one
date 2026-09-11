@@ -10,6 +10,8 @@ no network and no keys are involved.
 
 from __future__ import annotations
 
+import pytest
+
 from app.eval import build_gate_input, run_gate
 from app.eval.extract import split_requirement_criteria
 
@@ -276,8 +278,9 @@ def test_code_gate_fails_on_todo_stubs() -> None:
     assert not _metric(report, "RunnableStructure")["passed"]
 
 
-def test_code_gate_reports_unknown_grounding_rather_than_passing() -> None:
-    """A missing grounding report must not read as 'all locators verified'."""
+def test_code_gate_reports_missing_grounding_rather_than_passing() -> None:
+    """No grounding report at all means codegen did not do its job — that is a
+    failure, not an unknown."""
     code = {"bundle": CODE["bundle"]}
     cases = [{"id": "TC-0001", "criterion_id": "AC-01", "automation_rec": "automate"}]
     report = run_gate("eval_code", _code_input(code, cases))
@@ -287,17 +290,55 @@ def test_code_gate_reports_unknown_grounding_rather_than_passing() -> None:
     assert "unknown" in metric["reason"]
 
 
+def test_code_gate_still_fails_when_the_probe_ran_and_found_unverified_locators() -> None:
+    """The skip path must not become a loophole: a probe that ran and found
+    guesses is a genuine failure."""
+    code = {
+        **CODE,
+        "grounding_report": {"counts": {"unverified": 9, "dom_verified": 1}, "probe": "ran"},
+    }
+    cases = [{"id": "TC-0001", "criterion_id": "AC-01", "automation_rec": "automate"}]
+    report = run_gate("eval_code", _code_input(code, cases))
+    assert not report["passed"]
+    assert not _metric(report, "GroundingTier")["passed"]
+
+
 # --------------------------------------------------------------------------- #
 # empty input must not silently pass
 # --------------------------------------------------------------------------- #
 
 def test_gate_with_no_cases_reports_the_missing_input() -> None:
+    """Nothing to check is not a pass: the gate must say so."""
     report = run_gate(
         "eval_cases", build_gate_input("eval_cases", requirement=REQUIREMENT, plan=_plan())
     )
-    # Nothing to check is not a pass: the gate must say so.
     assert report["summary"]["total"] > 0
     assert not all(m["passed"] for m in report["metrics"])
+
+
+def test_code_gate_fails_on_an_empty_grounding_report() -> None:
+    """An empty grounding report is a codegen failure, not an 'unknown'."""
+    cases = [{"id": "TC-0001", "criterion_id": "AC-01", "automation_rec": "automate"}]
+    report = run_gate("eval_code", _code_input({"bundle": CODE["bundle"]}, cases))
+    assert not report["passed"]
+
+
+def test_code_gate_passes_when_grounding_was_skipped_not_failed() -> None:
+    """A probe that never ran is reported honestly, not treated as bad locators."""
+    code = {
+        **CODE,
+        "grounding_report": {
+            "counts": {"unverified": 4, "dom_verified": 0, "run_verified": 0},
+            "probe": "skipped",
+            "probe_note": "runner unavailable",
+        },
+    }
+    cases = [{"id": "TC-0001", "criterion_id": "AC-01", "automation_rec": "automate"}]
+    report = run_gate("eval_code", _code_input(code, cases))
+    metric = _metric(report, "GroundingTier")
+    assert metric["passed"]
+    assert "unverified" in metric["reason"]
+    assert metric["evidence"][0].get("skipped") is True
 
 
 # --------------------------------------------------------------------------- #
@@ -328,3 +369,74 @@ def test_passing_gate_does_not_stop_the_chain() -> None:
 
     ok = {"kind": "eval_report", "payload": {"gate": "eval_cases", "passed": True}}
     assert not _is_hard_failure(ok)
+
+
+# --------------------------------------------------------------------------- #
+# gate wiring — the layer the metric tests above do not reach
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_every_gate_engine_actually_runs_its_metrics() -> None:
+    """Each eval engine must measure a non-zero number of metrics.
+
+    The metric tests above call `run_gate` directly with the underscored gate
+    name, so they cannot catch an engine that looks its gate up under a name
+    with no metrics registered. That is exactly the bug this covers: the engine
+    ids are hyphenated while the gate registry is underscored, and the lookup
+    miss made every gate report "0 metrics" — which the harness then scored as
+    `0 == 0`, a pass.
+    """
+    from app.pipeline import registry
+
+    plan = _plan()
+    cases = _cases(plan)
+    payloads = {
+        "eval-plan": {"requirement": REQUIREMENT, "plan": plan},
+        "eval-cases": {"requirement": REQUIREMENT, "plan": plan, "cases": cases},
+        "eval-code": {"requirement": REQUIREMENT, "plan": plan, "cases": cases, "code": CODE},
+    }
+
+    for engine_id, payload in payloads.items():
+        engine = registry.get_engine(engine_id)
+        assert engine is not None and engine.run is not None, f"{engine_id} not registered"
+        result = await engine.run({"router": None}, **payload)
+        report = result["payload"]
+
+        assert report["summary"]["total"] > 0, (
+            f"{engine_id} measured no metrics — the gate name does not resolve "
+            "to a registered metric set"
+        )
+        assert len(report["metrics"]) == report["summary"]["total"]
+        # A gate that measured nothing must never look like a pass.
+        if report["summary"]["total"] == 0:
+            assert report["passed"] is False
+
+
+def test_engine_to_gate_mapping_matches_the_metric_registry() -> None:
+    """The hyphen->underscore mapping must cover every registered gate."""
+    from app.engines.eval_gate import GATE_FOR_ENGINE
+    from app.eval.metrics import GATE_NAMES, is_known_gate, metrics_for
+
+    for engine_id, gate in GATE_FOR_ENGINE.items():
+        assert is_known_gate(gate), f"{engine_id} maps to unknown gate {gate!r}"
+        assert metrics_for(gate), f"gate {gate!r} has no metrics registered"
+    assert set(GATE_FOR_ENGINE.values()) == set(GATE_NAMES)
+
+
+def test_gate_names_resolve_in_either_form() -> None:
+    from app.eval.metrics import metrics_for
+
+    assert len(metrics_for("eval-plan")) == len(metrics_for("eval_plan")) > 0
+    assert len(metrics_for("eval-cases")) == len(metrics_for("eval_cases")) > 0
+
+
+def test_unknown_gate_fails_instead_of_passing_vacuously() -> None:
+    """`passed = passed == total` over an empty metric list is `0 == 0`.
+
+    That is how a mis-wired gate reports health while measuring nothing, so an
+    unknown gate must be an explicit failure.
+    """
+    report = run_gate("eval_nonexistent", {"requirement": REQUIREMENT})
+    assert report["passed"] is False
+    assert report["summary"]["total"] == 0
+    assert "unknown gate" in report["summary"]["failed_metrics"][0]

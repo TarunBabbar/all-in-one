@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from ..core.llm import LLMRouter
 from ..core.prompts import PLAN_SYSTEM, TestPlan, plan_prompt
+from ..eval.extract import is_multi_step, split_requirement_criteria
 from ..pipeline.registry import Engine, register
 
 
@@ -31,6 +32,39 @@ def _summarize(plan: dict) -> dict:
     }
 
 
+def _plan_from_requirement(requirement: str) -> dict:
+    """Deterministic offline plan, derived from the requirement itself.
+
+    A hardcoded fixture would describe the same feature no matter what was
+    asked for, and the plan gate — which compares against criteria extracted
+    independently from the requirement text — would fail it. Deriving the
+    criteria here keeps the offline path self-consistent and still honestly
+    scorable.
+    """
+    stated = split_requirement_criteria(requirement)
+    if not stated:
+        stated = [requirement.strip() or "The stated behaviour"]
+
+    criteria = []
+    for i, text in enumerate(stated, start=1):
+        categories = ["positive", "negative", "edge"]
+        if is_multi_step(text):
+            categories.append("e2e")
+        criteria.append(
+            {"id": f"AC-{i:02d}", "text": text, "categories": categories}
+        )
+
+    return {
+        "criteria": criteria,
+        "assumptions": ["A reachable environment exists to test against"],
+        "ambiguous": [],
+        "approach": (
+            "Cover each stated criterion with positive, negative and edge cases, "
+            "plus an end-to-end case where the criterion describes a flow."
+        ),
+    }
+
+
 async def _test_plan(ctx: dict, **payload) -> dict:
     router: LLMRouter = ctx["router"]
     requirement: str = str(payload.get("text") or "")
@@ -38,7 +72,7 @@ async def _test_plan(ctx: dict, **payload) -> dict:
     if router.is_mock or not requirement.strip():
         # Offline/demo path: a deterministic plan so the chain stays runnable
         # without keys. The eval gate still scores it honestly.
-        plan = TestPlan._mock_example().model_dump()
+        plan = _plan_from_requirement(requirement)
     else:
         result = await router.complete_json(PLAN_SYSTEM, plan_prompt(requirement), TestPlan)
         plan = result.model_dump()

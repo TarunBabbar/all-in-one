@@ -10,7 +10,14 @@ from __future__ import annotations
 from typing import Any
 
 from .extract import flatten, plan_criteria, split_requirement_criteria
-from .metrics import DEEPEVAL_AVAILABLE, MetricResult, build_test_case, gates, metrics_for
+from .metrics import (
+    DEEPEVAL_AVAILABLE,
+    MetricResult,
+    build_test_case,
+    canonical_gate,
+    gates,
+    metrics_for,
+)
 
 
 def build_gate_input(
@@ -27,22 +34,23 @@ def build_gate_input(
     model, so the yardstick a gate measures against is always the requirement
     itself — not the model's summary of it.
     """
+    canonical = canonical_gate(gate)
     plan = plan or {}
     data: dict[str, Any] = {
-        "gate": gate,
+        "gate": canonical,
         "requirement": requirement,
         "plan": plan,
         "cases": cases or [],
         "code": code or {},
     }
-    if gate == "eval_plan":
+    if canonical == "eval_plan":
         data["stated_criteria"] = split_requirement_criteria(requirement)
         data["vague_criteria"] = [str(v) for v in (plan.get("ambiguous") or [])]
         data["assumptions"] = [str(a) for a in (plan.get("assumptions") or [])]
-    if gate == "eval_cases":
+    if canonical == "eval_cases":
         # Ground the case gate in the plan's own criteria list.
         data["stated_criteria"] = [c["text"] for c in plan_criteria(plan)]
-    if gate == "eval_code":
+    if canonical == "eval_code":
         data["stated_criteria"] = [c["text"] for c in plan_criteria(plan)]
     return data
 
@@ -52,10 +60,31 @@ def run_gate(gate: str, data: dict[str, Any]) -> dict[str, Any]:
 
     Synchronous by design: every metric is pure Python, so there is nothing to
     await. `a_measure` still exists on each metric for deepeval's async runner.
+
+    A gate that produces no metrics FAILS. Scoring `passed = passed == total`
+    over an empty list is `0 == 0` — a vacuous pass — which is exactly how a
+    mis-wired gate would look healthy while measuring nothing.
     """
-    test_case = build_test_case(gate, data)
+    canonical = canonical_gate(gate)
+    metrics = metrics_for(canonical)
+    if not metrics:
+        return {
+            "gate": canonical,
+            "passed": False,
+            "summary": {
+                "passed": 0,
+                "failed": 0,
+                "total": 0,
+                "failed_metrics": [f"unknown gate: {gate!r} — no metrics are registered"],
+            },
+            "metrics": [],
+            "engine": "deepeval-custom" if DEEPEVAL_AVAILABLE else "deepeval-shim",
+            "input_digest": {},
+        }
+
+    test_case = build_test_case(canonical, data)
     results: list[MetricResult] = []
-    for metric in metrics_for(gate):
+    for metric in metrics:
         try:
             metric.measure(test_case)
             results.append(metric.result())
@@ -75,7 +104,7 @@ def run_gate(gate: str, data: dict[str, Any]) -> dict[str, Any]:
     total = len(results)
 
     return {
-        "gate": gate,
+        "gate": canonical,
         "passed": passed_count == total,
         "summary": {
             "passed": passed_count,

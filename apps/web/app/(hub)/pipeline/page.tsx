@@ -178,11 +178,15 @@ function stageSummary(stage: Stage, payload: Record<string, unknown> | null | un
       case "eval_cases":
       case "eval_code": {
         const s = payload.summary as { passed?: number; total?: number } | undefined;
-        if (s?.total == null) return "Gate complete";
-        const failed = (s.total ?? 0) - (s.passed ?? 0);
+        const total = s?.total ?? 0;
+        // Zero metrics means the gate measured nothing — reporting "all 0
+        // metrics passed" would read as success when it is a wiring failure.
+        if (total === 0) return "no metrics ran";
+        const passed = s?.passed ?? 0;
+        const failed = total - passed;
         return failed > 0
-          ? `${s.passed}/${s.total} metrics passed · ${failed} failed`
-          : `all ${s.total} metrics passed`;
+          ? `${passed}/${total} metrics passed · ${failed} failed`
+          : `all ${total} metrics passed`;
       }
       case "test_cases": {
         const c = payload.count as number | undefined;

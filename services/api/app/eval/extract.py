@@ -29,25 +29,64 @@ _CRITERIA_HEAD = re.compile(r"acceptance\s+criteria|acceptance\s+tests?|criteria
 _WORD = re.compile(r"[a-z0-9]+")
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
-# Interaction and chrome vocabulary. "Open the login page" is navigation, not a
-# claim about behaviour, so these words must not count as invented scope. Without
-# this list any legitimate UI step looks like a hallucination, and the metric
-# would flag everything until it became useless.
+# Interaction, chrome and task-narration vocabulary. These carry no domain
+# claim, so they must not count towards "invented scope": "perform the action
+# with valid input" asserts nothing, while "authenticate via the corporate LDAP
+# directory" asserts a great deal. Without this list every legitimately phrased
+# step looks like a hallucination, and the metric would flag everything until
+# it became useless.
 UI_VOCAB = frozenset(
     {
+        # interaction
         "open", "click", "tap", "navigate", "go", "visit", "enter", "type", "fill",
         "submit", "press", "select", "set", "wait", "verify", "check", "assert",
         "confirm", "ensure", "expect", "see", "view", "display", "shown", "show",
+        # chrome
         "page", "screen", "form", "field", "button", "link", "element", "input",
         "app", "application", "site", "website", "browser", "url", "step", "steps",
         "using", "then", "given", "when", "should", "must", "and", "with",
+        # task narration — describes how a step is performed, not what is tested
+        "perform", "performs", "performing", "action", "actions", "behave",
+        "behaves", "behaviour", "behavior", "valid", "correct", "incorrect",
+        "expected", "result", "results", "outcome", "sequence", "order",
+        "first", "second", "next", "again", "repeat", "attempt", "attempts",
+        # standard test techniques — methodology, not domain behaviour
+        "drive", "minimum", "maximum", "boundary", "boundaries", "limit",
+        "limits", "extreme", "extremes", "range", "empty", "both",
     }
 )
+
+# Vocab and stopwords are compared against *stems* (see `_stem` below), so they
+# are stemmed once here rather than on every comparison.
 
 
 # --------------------------------------------------------------------------- #
 # text primitives
 # --------------------------------------------------------------------------- #
+
+def _stem(word: str) -> str:
+    """Conservative suffix stripping, so "errors" matches "error".
+
+    Without this, a case that says "a clear error is shown" is flagged as
+    invented against a requirement that says "handles invalid input without
+    errors" — a plural, not a different concept. Deliberately narrow: it only
+    strips regular English inflections and refuses to touch short words, so it
+    cannot merge genuinely different terms.
+    """
+    if len(word) > 5 and word.endswith("ing"):
+        return word[:-3]
+    if len(word) > 4 and word.endswith("ed"):
+        return word[:-2]
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+_STOP_STEMS = frozenset(_stem(w) for w in _STOPWORDS)
+_UI_STEMS = frozenset(_stem(w) for w in UI_VOCAB)
+
 
 def normalize(text: str) -> str:
     """Lowercase, strip punctuation, collapse whitespace."""
@@ -55,8 +94,12 @@ def normalize(text: str) -> str:
 
 
 def tokens(text: str) -> set[str]:
-    """Content-bearing words only."""
-    return {w for w in _WORD.findall((text or "").lower()) if w not in _STOPWORDS and len(w) > 1}
+    """Content-bearing word stems only."""
+    return {
+        _stem(w)
+        for w in _WORD.findall((text or "").lower())
+        if w not in _STOPWORDS and len(w) > 1
+    }
 
 
 def flatten(value: Any) -> str:
@@ -129,9 +172,11 @@ def distinctive(text: str) -> set[str]:
     pure boilerplate makes no claim that could be invented.
     """
     return {
-        w
+        _stem(w)
         for w in _WORD.findall((text or "").lower())
-        if w not in _STOPWORDS and w not in UI_VOCAB and len(w) > 2
+        if _stem(w) not in _STOP_STEMS
+        and _stem(w) not in _UI_STEMS
+        and len(w) > 2
     }
 
 

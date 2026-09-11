@@ -690,7 +690,14 @@ async def _codegen(ctx: dict, **payload) -> dict:
             "grounding_report": {
                 "tiers": GROUNDING_TIERS,
                 "counts": counts,
-                "probe": "ran" if found is not None else "skipped (runner unreachable)",
+                # A clean machine-readable value; the human note rides beside it
+                # so consumers never have to string-match a sentence.
+                "probe": "ran" if found is not None else "skipped",
+                "probe_note": (
+                    "locators probed against the live app"
+                    if found is not None
+                    else "runner unavailable — locators unverified, verified at run time"
+                ),
                 "verified": verified,
                 "total": total,
             },
