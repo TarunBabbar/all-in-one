@@ -23,3 +23,7 @@ blob-report/
 .DS_Store
 *.tsbuildinfo
 .commandcode/
+
+# Design reference samples (local only — not product code)
+qa-pipeline-redesign.html
+*-redesign.html

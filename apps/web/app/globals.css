@@ -1,32 +1,80 @@
 @import "tailwindcss";
 
-/* ---- Claude Code-style beige theme ---- */
+/* ---------------------------------------------------------------------------
+   QA/One design tokens — dark console
+
+   A monitoring surface for a chain of agents. Depth comes from a four-step
+   surface ramp and hairlines, not from shadow; the accent is a single indigo
+   reserved for the one primary action and live state. Type does the rest:
+   Space Grotesk for headings, IBM Plex Mono for anything a machine produced
+   (numbers, ids, timings, labels), Inter for prose.
+--------------------------------------------------------------------------- */
+
 :root {
-  /* Surfaces */
-  --bg: #f5f0e8;            /* main canvas — warm cream */
-  --bg-elev: #fdfaf4;       /* cards / raised panels */
-  --bg-sunken: #ece4d6;     /* sidebar, wells */
-  --bg-hover: #e7ddcc;
+  /* Surfaces — four steps, darkest to lightest */
+  --bg: #0b0e13;            /* page */
+  --bg-elev: #12161d;       /* cards, sidebar */
+  --bg-sunken: #161b23;     /* wells, table headers */
+  --bg-inset: #0e1219;      /* code blocks — darker than the page for contrast */
+  --bg-hover: #1b212a;
+  --bg-hover-elev: #1b212a;
 
   /* Ink */
-  --ink: #1a1a1a;           /* primary text */
-  --ink-soft: #57534e;      /* secondary text */
-  --ink-faint: #8a8378;     /* muted / placeholders */
+  --ink: #e7eaef;
+  --ink-soft: #97a1b0;
+  --ink-faint: #5c6474;
 
-  /* Lines */
-  --line: #e0d6c5;
-  --line-strong: #cbbfa9;
+  /* Lines — hairlines carry all the structure here */
+  --line: #232a34;
+  --line-soft: #1b212a;
+  --line-strong: #313a47;
 
-  /* Accent (orange — Claude/QA warm accent) */
-  --accent: #c1573a;
-  --accent-strong: #9e4128;
-  --accent-soft: rgba(193, 87, 58, 0.1);
-  --accent-soft-2: rgba(193, 87, 58, 0.18);
+  /* Accent — indigo. The only saturated color in the chrome. */
+  --accent: #7c7cff;
+  --accent-strong: #9b9bff;   /* brighter on hover: dark surfaces lift, not sink */
+  --accent-dim: #5e5ed9;
+  --accent-ink: #0b0e13;      /* text ON the accent */
+  --accent-soft: rgba(124, 124, 255, 0.13);
+  --accent-soft-2: rgba(124, 124, 255, 0.2);
+  --accent-line: rgba(124, 124, 255, 0.35);
 
   /* Status */
-  --ok: #2f7d4f;
-  --warn: #a16207;
-  --bad: #b91c1c;
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.13);
+  --warn: #f5b84c;
+  --warn-soft: rgba(245, 184, 76, 0.13);
+  --bad: #ff6b6b;
+  --bad-soft: rgba(255, 107, 107, 0.13);
+  --pending: #4a5566;
+  --pending-soft: rgba(74, 85, 102, 0.13);
+  --info: #7fb3f0;
+  --info-soft: rgba(127, 179, 240, 0.13);
+
+  /* Focus — visible against both page and raised surfaces */
+  --focus: #7c7cff;
+  --focus-ring: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--focus);
+
+  /* Type. Families are loaded via <link> in app/layout.tsx rather than
+     next/font, so the build never needs network access to fetch them. */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Elevation — shallow and neutral. On dark, borders do the work. */
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.28);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.34);
+  --shadow-md: 0 4px 12px -3px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 12px 28px -8px rgba(0, 0, 0, 0.62);
+
+  /* Radii */
+  --r-sm: 5px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 * {
@@ -37,30 +85,149 @@ html,
 body {
   background: var(--bg);
   color: var(--ink);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* ---- QA pipeline motion ---- */
-
-@keyframes qa-sonar {
-  0% {
-    transform: scale(1);
-    opacity: 0.5;
-  }
-  80%,
-  100% {
-    transform: scale(2.1);
-    opacity: 0;
-  }
+body {
+  font-size: 13.5px;
+  line-height: 1.55;
 }
-.qa-sonar {
-  animation: qa-sonar 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+
+/* Headings get the display face. The tight tracking is what makes a grotesk
+   read as engineered rather than friendly. */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+}
+
+/* Machine-produced text: numbers, ids, timings, labels. Mono keeps columns
+   aligned and signals "this came from the system, not from a person". */
+code,
+kbd,
+pre,
+samp,
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "calt" 0;
+}
+
+/* Align any numeric column, wherever it appears. */
+.tabular,
+table,
+th,
+td,
+time {
+  font-variant-numeric: tabular-nums;
+}
+
+/* One focus treatment for the whole product. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-sm);
+}
+
+::selection {
+  background: var(--accent-soft-2);
+  color: var(--ink);
+}
+
+/* The small mono label used for field names, nav groups and section headers.
+   Lowercase, like a config key — it reads as metadata rather than a title. */
+.field-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
+
+/* Disclosure chevron: rotates when the parent <details> opens. Done in CSS so
+   it works regardless of Tailwind's variant support. */
+details[open] > summary .chev {
+  transform: rotate(90deg);
+}
+
+/* ---- Interaction primitives ---------------------------------------------
+   Defined once so every surface moves the same way.
+------------------------------------------------------------------------- */
+
+/* Press feedback. Scale rather than color: it reads on any surface and costs
+   the compositor nothing. */
+.press {
+  transition: transform 120ms var(--ease-out);
+}
+.press:active {
+  transform: scale(0.985);
+}
+
+/* Height-free disclosure. Animating `height` needs measurement; 0fr -> 1fr on
+   grid-template-rows gives the same reveal with no JS and no layout thrash. */
+.qa-collapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition:
+    grid-template-rows 320ms var(--ease-out),
+    opacity 200ms var(--ease-out);
+  opacity: 0;
+}
+.qa-collapse[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.qa-collapse > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Scrollbars: the default bars are light-on-light here and fight the surface. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--line-strong);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ink-faint);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---- Motion -------------------------------------------------------------
+   Short and functional. Product motion announces a change; it never delays
+   one. All of it collapses under prefers-reduced-motion.
+------------------------------------------------------------------------- */
+
+@keyframes qa-indeterminate {
+  from {
+    background-position: 0% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
 }
 
 @keyframes qa-rise {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
@@ -68,23 +235,19 @@ body {
   }
 }
 .qa-rise {
-  animation: qa-rise 0.35s ease-out both;
+  animation: qa-rise 0.32s var(--ease-out) both;
 }
 
-@keyframes qa-flow {
+@keyframes qa-fade {
+  from {
+    opacity: 0;
+  }
   to {
-    background-position: 24px 0;
+    opacity: 1;
   }
 }
-.qa-flow-line {
-  background-image: linear-gradient(
-    to right,
-    transparent 0 45%,
-    currentColor 45% 55%,
-    transparent 55% 100%
-  );
-  background-size: 24px 100%;
-  animation: qa-flow 0.9s linear infinite;
+.qa-fade {
+  animation: qa-fade 0.24s var(--ease-out) both;
 }
 
 @keyframes qa-scan {
@@ -96,5 +259,38 @@ body {
   }
 }
 .qa-scan {
-  animation: qa-scan 1.4s ease-in-out infinite;
+  animation: qa-scan 1.4s var(--ease-in-out) infinite;
+}
+
+@keyframes qa-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.qa-spin {
+  animation: qa-spin 1s linear infinite;
+}
+
+@keyframes qa-pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.qa-pulse {
+  animation: qa-pulse-dot 2s var(--ease-in-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

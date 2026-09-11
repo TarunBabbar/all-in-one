@@ -1,7 +1,9 @@
 import Link from "next/link";
 
+import { Badge } from "@/components/badge";
+import { Icon, type IconName } from "@/lib/icons";
 import { API_URL, type Project } from "@/lib/api";
-import { TOOLS } from "@/lib/tools";
+import { PIPELINE, TOOL_GROUPS } from "@/lib/tools";
 
 async function getProjects(): Promise<Project[]> {
   try {
@@ -13,93 +15,264 @@ async function getProjects(): Promise<Project[]> {
   }
 }
 
+/* The seven stages of the flagship flow — the product's identity, so it gets
+   the one piece of composed visual the page carries. */
+const STAGES: { icon: IconName; label: string }[] = [
+  { icon: "intake", label: "Intake" },
+  { icon: "doctor", label: "Doctor" },
+  { icon: "cases", label: "Cases" },
+  { icon: "codegen", label: "CodeGen" },
+  { icon: "runner", label: "Run" },
+  { icon: "triage", label: "Triage" },
+  { icon: "release", label: "Release" },
+];
+
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "—";
+  const diff = Date.now() - then;
+  const min = Math.round(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hrs = Math.round(min / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
 export default async function Home() {
-  const pipeline = TOOLS.find((t) => t.id === "pipeline");
-  const tools = TOOLS.filter((t) => t.id !== "pipeline" && t.id !== "intake");
   const projects = await getProjects();
 
   return (
     <div className="mx-auto max-w-5xl">
-      <header className="mb-8">
-        <p className="text-xs font-semibold uppercase tracking-widest text-[var(--accent)]">
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Badge tone="accent" dot>
           AI QA workspace
-        </p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight">QA/One</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--ink-soft)]">
-          Run your QA flow end to end — from a raw requirement to a release
-          verdict — plus focused tools for every step.
-        </p>
-      </header>
+        </Badge>
+      </div>
 
-      {/* Flagship: Pipeline */}
-      <section className="mb-8">
-        <div className="rounded-xl border border-[var(--accent-soft-2)] bg-[var(--bg-elev)] p-6 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-[var(--accent)]">
-                {pipeline?.icon} Flagship
-              </p>
-              <h2 className="mt-1 text-xl font-bold">{pipeline?.name}</h2>
-              <p className="mt-1 max-w-lg text-sm text-[var(--ink-soft)]">
-                {pipeline?.description}. Paste a requirement and watch it flow
-                through diagnosis, test cases, code generation, execution,
-                failure triage, and a GO/NO-GO release verdict — with an
-                approval gate at every step.
-              </p>
-            </div>
-            <Link
-              href={pipeline?.href ?? "/pipeline"}
-              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[#fdfaf4] hover:bg-[var(--accent-strong)]"
+      <h1 className="text-[34px] font-semibold leading-tight text-[var(--ink)]">
+        QA<span className="text-[var(--accent)]">/</span>One
+      </h1>
+      <div className="mb-7 mt-2.5 flex flex-wrap items-end justify-between gap-4">
+        <p className="max-w-[62ch] text-[14.5px] leading-relaxed text-[var(--ink-soft)]">
+          One requirement in, a release verdict out. Every stage is an agent you
+          can inspect, approve, and rerun on its own.
+        </p>
+        <Link
+          href={PIPELINE.href}
+          className="press inline-flex shrink-0 items-center gap-2 rounded-[var(--r-md)] bg-[var(--accent)] px-4 py-2.5 text-[13px] font-semibold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)]"
+        >
+          New pipeline
+          <Icon name="arrow" size={15} />
+        </Link>
+      </div>
+
+      {/* Flagship: the pipeline, shown as the chain it actually is */}
+      <section className="mb-7 overflow-hidden rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3.5">
+          <div className="flex items-center gap-2.5">
+            <Icon name="pipeline" size={17} className="text-[var(--accent)]" />
+            <h2
+              className="text-[15px] font-semibold text-[var(--ink)]"
+              style={{ fontFamily: "var(--font-display)" }}
             >
-              Start a pipeline →
-            </Link>
+              {PIPELINE.name}
+            </h2>
+            <Badge>7 agents</Badge>
           </div>
+          <Link
+            href={PIPELINE.href}
+            className="text-[12.5px] font-semibold text-[var(--accent)] transition-colors hover:text-[var(--accent-strong)]"
+          >
+            Open pipeline →
+          </Link>
+        </div>
+
+        <ol className="flex flex-wrap items-stretch gap-y-3 px-5 py-4">
+          {STAGES.map((stage, i) => (
+            <li
+              key={stage.label}
+              className="qa-rise flex items-center"
+              style={{ animationDelay: `${i * 45}ms` }}
+            >
+              <div className="flex flex-col items-center gap-1.5">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--line-strong)] bg-[var(--bg-sunken)] text-[var(--ink-soft)]">
+                  <Icon name={stage.icon} size={15} />
+                </span>
+                <span
+                  className="text-[10px] text-[var(--ink-faint)]"
+                  style={{ fontFamily: "var(--font-mono)" }}
+                >
+                  {stage.label}
+                </span>
+              </div>
+              {i < STAGES.length - 1 && (
+                <span
+                  aria-hidden
+                  className="mx-2 mb-5 h-px w-6 shrink-0 bg-[var(--line-strong)] sm:w-9"
+                />
+              )}
+            </li>
+          ))}
+        </ol>
+
+        <p className="border-t border-[var(--line)] px-5 py-3 text-[12.5px] leading-relaxed text-[var(--ink-soft)]">
+          Diagnosis scores the requirement before anything is built, every stage
+          checks its own output, and the release verdict is computed from run
+          evidence rather than described by a model. A failed agent stops the
+          chain instead of passing bad output downstream.
+        </p>
+      </section>
+
+      {/* Recent runs — a table, because that is what the data is */}
+      <section className="mb-7">
+        <div className="mb-3.5 flex items-baseline justify-between">
+          <h2
+            className="text-[15px] font-semibold text-[var(--ink)]"
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            Recent runs
+          </h2>
+          {projects.length > 0 && (
+            <span
+              className="text-[12px] tabular-nums text-[var(--ink-faint)]"
+              style={{ fontFamily: "var(--font-mono)" }}
+            >
+              {projects.length} project{projects.length === 1 ? "" : "s"}
+            </span>
+          )}
+        </div>
+
+        <div className="overflow-hidden rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]">
+          {projects.length === 0 ? (
+            <div className="px-5 py-8 text-center">
+              <p className="text-[13px] font-semibold text-[var(--ink-soft)]">
+                No runs yet
+              </p>
+              <p className="mx-auto mt-1 max-w-sm text-[12.5px] leading-relaxed text-[var(--ink-faint)]">
+                Start a pipeline with a requirement or a Jira issue key. Each
+                project keeps its own artifacts, so you can reopen a run and
+                resume from the stage that stopped.
+              </p>
+              <Link
+                href={PIPELINE.href}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-[var(--r-md)] border border-[var(--line-strong)] bg-[var(--bg)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--ink)] transition-colors hover:bg-[var(--bg-hover-elev)]"
+              >
+                Start the first run
+                <Icon name="arrow" size={14} />
+              </Link>
+            </div>
+          ) : (
+            <table className="w-full border-collapse text-left">
+              <thead>
+                <tr className="border-b border-[var(--line)]">
+                  <th className="field-label px-5 py-2.5 font-normal">project</th>
+                  <th className="field-label hidden px-4 py-2.5 font-normal sm:table-cell">
+                    created
+                  </th>
+                  <th className="w-[1%] px-5 py-2.5" />
+                </tr>
+              </thead>
+              {/* Rows fade rather than rise: transforms on <tr> are inconsistent
+                  across engines, and a table is not the place to find out. */}
+              <tbody>
+                {projects.slice(0, 6).map((p, i) => (
+                  <tr
+                    key={p.id}
+                    className="qa-fade group border-b border-[var(--line-soft)] last:border-b-0 hover:bg-[var(--bg-sunken)]"
+                    style={{ animationDelay: `${Math.min(i * 30, 180)}ms` }}
+                  >
+                    <td className="px-5 py-2.5">
+                      <Link
+                        href={`/pipeline?project=${p.id}`}
+                        className="text-[13px] font-medium text-[var(--ink)] transition-colors group-hover:text-[var(--accent)]"
+                      >
+                        {p.name}
+                      </Link>
+                      <p
+                        className="mt-0.5 text-[10.5px] text-[var(--ink-faint)]"
+                        style={{ fontFamily: "var(--font-mono)" }}
+                      >
+                        {p.id.slice(0, 8)}
+                      </p>
+                    </td>
+                    <td className="hidden px-4 py-2.5 align-middle sm:table-cell">
+                      <time
+                        dateTime={p.created_at}
+                        className="text-[12px] text-[var(--ink-soft)]"
+                        style={{ fontFamily: "var(--font-mono)" }}
+                        title={new Date(p.created_at).toLocaleString()}
+                      >
+                        {relativeTime(p.created_at)}
+                      </time>
+                    </td>
+                    <td className="px-5 py-2.5 text-right">
+                      <Link
+                        href={`/pipeline?project=${p.id}`}
+                        className="inline-flex items-center gap-1 rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-semibold text-[var(--ink-faint)] transition-colors hover:text-[var(--ink)]"
+                      >
+                        Resume
+                        <Icon name="arrow" size={13} />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </section>
 
-      {/* Recent projects */}
-      {projects.length > 0 && (
-        <section className="mb-8">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-[var(--ink-faint)]">
-            Recent projects
-          </h2>
-          <div className="overflow-hidden rounded-xl border bg-[var(--bg-elev)] shadow-sm">
-            {projects.slice(0, 5).map((p) => (
-              <Link
-                key={p.id}
-                href={`/pipeline?project=${p.id}`}
-                className="flex items-center justify-between border-b px-4 py-3 text-sm transition last:border-b-0 hover:bg-[var(--bg-hover)]"
-              >
-                <span className="font-medium text-[var(--ink)]">{p.name}</span>
-                <span className="text-xs text-[var(--ink-faint)]">
-                  {new Date(p.created_at).toLocaleString()}
-                </span>
-              </Link>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* All tools */}
+      {/* Tool index — grouped by workflow, divided rather than carded */}
       <section>
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-[var(--ink-faint)]">
+        <h2
+          className="mb-3.5 text-[15px] font-semibold text-[var(--ink)]"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
           Tools
         </h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {tools.map((t) => (
-            <Link
-              key={t.id}
-              href={t.href}
-              className="group rounded-xl border bg-[var(--bg-elev)] p-4 shadow-sm transition hover:border-[var(--accent-soft-2)] hover:bg-[var(--bg-hover)]"
-            >
-              <span className="text-xl">{t.icon}</span>
-              <h3 className="mt-2 font-semibold text-[var(--ink)] group-hover:text-[var(--accent-strong)]">
-                {t.name}
-              </h3>
-              <p className="mt-1 text-xs leading-relaxed text-[var(--ink-soft)]">
-                {t.description}
+        <div className="grid gap-x-10 gap-y-6 sm:grid-cols-2">
+          {TOOL_GROUPS.map((group) => (
+            <div key={group.id}>
+              <p className="field-label mb-2 border-b border-[var(--line)] pb-2">
+                {group.label}
               </p>
-            </Link>
+              <ul>
+                {group.tools.map((t, i) => (
+                  <li
+                    key={t.id}
+                    className="qa-rise"
+                    style={{ animationDelay: `${Math.min(i * 20, 140)}ms` }}
+                  >
+                    <Link
+                      href={t.href}
+                      className="group flex items-center gap-2.5 rounded-[var(--r-md)] border border-transparent px-2.5 py-2 transition-colors hover:border-[var(--line)] hover:bg-[var(--bg-elev)]"
+                    >
+                      <Icon
+                        name={t.icon}
+                        size={16}
+                        className="shrink-0 text-[var(--ink-faint)] transition-colors group-hover:text-[var(--accent)]"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13.5px] font-medium leading-tight text-[var(--ink)]">
+                          {t.name}
+                        </span>
+                        <span className="mt-0.5 block truncate text-[11.5px] leading-tight text-[var(--ink-faint)]">
+                          {t.description}
+                        </span>
+                      </span>
+                      <Icon
+                        name="arrow"
+                        size={13}
+                        className="shrink-0 text-transparent transition-colors group-hover:text-[var(--ink-faint)]"
+                      />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
         </div>
       </section>

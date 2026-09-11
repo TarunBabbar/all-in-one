@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { fetchJiraIssue, type JiraIssue } from "@/lib/api";
+import { Icon } from "@/lib/icons";
 
 /**
  * Fetch a Jira issue by key and hand its text to the parent (used wherever a
@@ -10,10 +11,8 @@ import { fetchJiraIssue, type JiraIssue } from "@/lib/api";
  */
 export function JiraIssueFetcher({
   onFetched,
-  compact,
 }: {
   onFetched: (issue: JiraIssue, text: string) => void;
-  compact?: boolean;
 }) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -38,9 +37,10 @@ export function JiraIssueFetcher({
   };
 
   return (
-    <div className={`rounded-lg border border-[var(--line)] bg-[var(--bg-sunken)]/60 p-3 ${compact ? "" : ""}`}>
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--ink-faint)]">
-        📋 Load from Jira
+    <div className="rounded-lg border border-[var(--line)] bg-[var(--bg-sunken)]/60 p-3">
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--ink-faint)]">
+        <Icon name="intake" size={13} />
+        Load from Jira
       </p>
       <div className="flex gap-2">
         <input
@@ -52,7 +52,7 @@ export function JiraIssueFetcher({
         <button
           onClick={fetch}
           disabled={busy || !key.trim()}
-          className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-[#fdfaf4] hover:bg-[var(--accent-strong)] disabled:opacity-40"
+          className="press rounded-[var(--r-md)] bg-[var(--accent)] px-3 py-1.5 text-[12px] font-bold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-40"
         >
           {busy ? "Fetching…" : "Fetch issue"}
         </button>

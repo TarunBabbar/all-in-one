@@ -27,6 +27,8 @@ export interface StageStatus {
   state: string; // not_started | draft | running | awaiting_approval | approved | ...
   output_artifact_id: string | null;
   error: string | null;
+  started_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface PipelineState {
@@ -187,15 +189,18 @@ export function testJira(): Promise<{ ok: boolean; error?: string; display_name?
   return request<{ ok: boolean; error?: string; display_name?: string }>("/settings/test/jira");
 }
 
-export function testGithub(): Promise<{
+export interface GithubTestResult {
   ok: boolean;
   error?: string;
+  /** GitHub login of the authenticated user. */
   user?: string;
+  /** "owner/repo" of the connected repository. */
   full_name?: string;
-}> {
-  return request<{ ok: boolean; error?: string; user?: string; full_name?: string }>(
-    "/settings/test/github",
-  );
+  default_branch?: string;
+}
+
+export function testGithub(): Promise<GithubTestResult> {
+  return request<GithubTestResult>("/settings/test/github");
 }
 
 // ---- Jira issue fetch ----

@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { pushFilesToGithub, type GithubFile } from "@/lib/api";
+import { Icon } from "@/lib/icons";
 
 /**
  * Push generated artifacts (a Playwright suite, a report, exports) to the
@@ -47,8 +48,9 @@ export function GitHubPusher({
 
   return (
     <div className="rounded-lg border border-[var(--line)] bg-[var(--bg-sunken)]/60 p-3">
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--ink-faint)]">
-        🐙 Push to GitHub ({files.length} file{files.length === 1 ? "" : "s"})
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--ink-faint)]">
+        <Icon name="link" size={13} />
+        Push to GitHub ({files.length} file{files.length === 1 ? "" : "s"})
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -61,7 +63,7 @@ export function GitHubPusher({
         <button
           onClick={push}
           disabled={busy || !files.length}
-          className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-xs font-semibold text-[#fdfaf4] hover:bg-[var(--accent-strong)] disabled:opacity-40"
+          className="press rounded-[var(--r-md)] bg-[var(--accent)] px-3 py-1.5 text-[12px] font-bold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-40"
         >
           {busy ? "Pushing…" : buttonLabel ?? "Push files"}
         </button>

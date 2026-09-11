@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { ArtifactView } from "@/components/artifact-view";
+import { Badge, type BadgeTone } from "@/components/badge";
 import { GitHubPusher } from "@/components/github-pusher";
 import { JiraIssueFetcher } from "@/components/jira-issue-fetcher";
+import { Icon, type IconName } from "@/lib/icons";
 import {
   createProject,
   getArtifact,
@@ -20,15 +22,25 @@ import {
 } from "@/lib/api";
 
 /**
- * The flagship pipeline. A requirement flows through a chain of AI agents
- * (intake → doctor → test cases → codegen → run → triage → release) fully
- * automatically — each agent's output is stored and feeds the next. The page
- * polls a status endpoint so you watch the agents light up live, with a log
- * pane streaming underneath. On failure the chain stops at the failed agent;
- * edit its inputs and resume from there.
+ * The flagship pipeline: a requirement flows through a chain of AI agents
+ * (intake → doctor → test cases → codegen → run → triage → release)
+ * automatically, each agent's output feeding the next. The page polls a status
+ * endpoint so the rows update live.
+ *
+ * The page is a run monitor and answers four questions, in order of urgency:
+ *
+ *   where am I?           → the run list and the progress bar
+ *   what's happening now? → the running agent, with live elapsed time
+ *   what did I get?       → each agent's summary, expandable to full output
+ *   why did it stop?      → the failed agent's row, with editable input + resume
+ *
+ * A raw event log is deliberately NOT one of these. Everything it carried is
+ * already expressed at higher fidelity by one of the four, so a permanently
+ * visible log beside them would be the same information twice. The ordered
+ * trail still has forensic value, so it survives as a collapsed "Event trail".
  */
 
-// Matches services/api PIPELINE_STAGES order. `visual` is optional/skippable.
+// Matches services/api PIPELINE_STAGES order.
 const STAGES = [
   "intake",
   "doctor",
@@ -41,15 +53,21 @@ const STAGES = [
 ] as const;
 type Stage = (typeof STAGES)[number];
 
-const LABELS: Record<Stage, { name: string; icon: string; desc: string }> = {
-  intake: { name: "Intake", icon: "📥", desc: "Normalize the requirement" },
-  doctor: { name: "Doctor", icon: "🩺", desc: "Quality score + findings" },
-  test_cases: { name: "Test Cases", icon: "🧪", desc: "Typed, prioritized cases" },
-  codegen: { name: "CodeGen", icon: "⚙️", desc: "Playwright TS suite" },
-  run: { name: "Run", icon: "🏃", desc: "Sandboxed execution" },
-  triage: { name: "Triage", icon: "🔍", desc: "Cluster root causes" },
-  visual: { name: "Visual", icon: "👁️", desc: "Regression check (optional)" },
-  release: { name: "Release", icon: "🚦", desc: "GO / NO-GO verdict" },
+// The auto-chain never executes optional stages (the API's SKIPPABLE_STAGES),
+// so `visual` is excluded from the chain, the totals and the progress bar. A
+// node that can never light up would leave every completed run reading "7/8".
+const CHAIN_STAGES = STAGES.filter((s) => s !== "visual");
+type ChainStage = (typeof CHAIN_STAGES)[number];
+
+const LABELS: Record<Stage, { name: string; icon: IconName; desc: string }> = {
+  intake: { name: "Intake", icon: "intake", desc: "Normalize the requirement" },
+  doctor: { name: "Doctor", icon: "doctor", desc: "Quality score + findings" },
+  test_cases: { name: "Test Cases", icon: "cases", desc: "Typed, prioritized cases" },
+  codegen: { name: "CodeGen", icon: "codegen", desc: "Playwright TS suite" },
+  run: { name: "Run", icon: "runner", desc: "Sandboxed execution" },
+  triage: { name: "Triage", icon: "triage", desc: "Cluster root causes" },
+  visual: { name: "Visual", icon: "visual", desc: "Regression check (optional)" },
+  release: { name: "Release", icon: "release", desc: "GO / NO-GO verdict" },
 };
 
 // Editable inputs exposed per agent (mirrors OVERRIDABLE_INPUTS on the API).
@@ -79,7 +97,6 @@ const DEMO_REQUIREMENT =
   "Search must handle special characters and invalid input without errors.";
 
 const DONE = new Set(["approved"]);
-const PENDING = new Set(["not_started", "draft"]);
 
 function githubFilesFromCodegen(payload: Record<string, unknown> | undefined): GithubFile[] {
   if (!payload) return [];
@@ -154,7 +171,70 @@ function stageSummary(stage: Stage, payload: Record<string, unknown> | null | un
   }
 }
 
+/* ------------------------------ time helpers ------------------------------ */
+
+/** Compact duration: 0.8s, 12s, 4m 05s. */
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return `${(ms / 1000).toFixed(1)}s`;
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}m ${String(sec).padStart(2, "0")}s`;
+}
+
+/** Fixed to the minute — exact seconds matter while something is running, not
+ * for a list of things that already finished. */
+function formatClock(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Ticks once a second while `active`, so a running stage shows real elapsed
+ * time. This is what a log's timestamps used to imply, said directly. */
+function useElapsed(startedAt: string | null | undefined, active: boolean): number | null {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active || !startedAt) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active, startedAt]);
+  if (!startedAt) return null;
+  const start = new Date(startedAt).getTime();
+  if (Number.isNaN(start)) return null;
+  return (active ? now : Date.now()) - start;
+}
+
+/**
+ * `useSearchParams` is a dynamic API: it cannot be resolved during the static
+ * prerender Next runs at build time, so any component that calls it must sit
+ * behind a Suspense boundary or the page fails to export. The boundary also
+ * gives the route a real loading state on first paint.
+ */
 export default function PipelinePage() {
+  return (
+    <Suspense fallback={<PipelineLoading />}>
+      <PipelinePageInner />
+    </Suspense>
+  );
+}
+
+function PipelineLoading() {
+  return (
+    <div className="mx-auto max-w-[900px]">
+      <div className="mb-4 h-6 w-40 animate-pulse rounded-[6px] bg-[var(--bg-elev)]" />
+      <div className="mb-7 h-9 w-64 animate-pulse rounded-[8px] bg-[var(--bg-elev)]" />
+      <div className="space-y-5">
+        <div className="h-24 animate-pulse rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]" />
+        <div className="h-28 animate-pulse rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]" />
+      </div>
+    </div>
+  );
+}
+
+function PipelinePageInner() {
   const params = useSearchParams();
   const projectParam = params.get("project");
   const [loadedProject, setLoadedProject] = useState<string | null>(null);
@@ -173,11 +253,8 @@ function PipelineBody({ initialProjectId }: { initialProjectId: string | null })
   const [status, setStatus] = useState<PipelineStatus | null>(null);
   const [overrides, setOverrides] = useState<Record<string, Record<string, string>>>({});
   const [log, setLog] = useState<LogEntry[]>([]);
-  const [showLog, setShowLog] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const logRef = useRef<HTMLDivElement>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
 
   const stages = status?.stages ?? {};
   const running = status?.running ?? false;
@@ -230,20 +307,6 @@ function PipelineBody({ initialProjectId }: { initialProjectId: string | null })
     const timer = setInterval(tick, 1200);
     return () => clearInterval(timer);
   }, [projectId, running, syncStatus]);
-
-  // Auto-scroll the log to the newest line.
-  useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [log.length]);
-
-  // Keep the running node in view as it advances.
-  useEffect(() => {
-    if (!running || !trackRef.current) return;
-    const idx = STAGES.findIndex((s) => stageState(s) === "running");
-    if (idx < 0) return;
-    const node = trackRef.current.children[idx] as HTMLElement | undefined;
-    node?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-  }, [running, stageState]);
 
   const start = async () => {
     setBusy(true);
@@ -302,32 +365,30 @@ function PipelineBody({ initialProjectId }: { initialProjectId: string | null })
     }
   };
 
-  const started = STAGES.some((s) => stageState(s) !== "not_started");
-  const doneCount = STAGES.filter((s) => DONE.has(stageState(s))).length;
-  const activeCount = STAGES.filter((s) => stageState(s) === "running").length;
-  const blockedStage = STAGES.find((s) => stageState(s) === "blocked") ?? null;
+  const started = CHAIN_STAGES.some((s) => stageState(s) !== "not_started");
+  const doneCount = CHAIN_STAGES.filter((s) => DONE.has(stageState(s))).length;
+  const blockedStage = CHAIN_STAGES.find((s) => stageState(s) === "blocked") ?? null;
   const appUrl = String(status?.inputs?.app_url ?? "");
-  const progress = Math.round((doneCount / STAGES.length) * 100);
-  const phase = running ? "running" : blockedStage ? "failed" : doneCount === STAGES.length ? "complete" : started ? "paused" : "idle";
+  const progress = Math.round((doneCount / CHAIN_STAGES.length) * 100);
+  const phase = running ? "running" : blockedStage ? "failed" : doneCount === CHAIN_STAGES.length ? "complete" : started ? "paused" : "idle";
 
   return (
-    <div className="mx-auto max-w-6xl">
-      <header className="mb-6">
-        <div className="flex items-center gap-2">
-          <span className="rounded-full bg-[var(--accent-soft-2)] px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-[var(--accent-strong)]">
-            Flagship tool
-          </span>
-          {projectId && <PhasePill phase={phase} />}
-        </div>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight text-[var(--ink)]">
-          AI QA Pipeline
-        </h1>
-        <p className="mt-1 text-sm leading-relaxed text-[var(--ink-soft)]">
-          One requirement in — a chain of AI agents runs end to end, streaming
-          live. If an agent fails, the run stops there so you can fix its input
-          and resume.
-        </p>
-      </header>
+    <div className="mx-auto max-w-[900px]">
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Badge tone="accent" dot>
+          Flagship tool
+        </Badge>
+        {projectId && <PhaseBadge phase={phase} />}
+      </div>
+
+      <h1 className="text-[34px] font-semibold leading-tight text-[var(--ink)]">
+        AI QA Pipeline
+      </h1>
+      <p className="mb-7 mt-2.5 max-w-[62ch] text-[14.5px] leading-relaxed text-[var(--ink-soft)]">
+        One requirement goes in — seven agents run end to end, streaming live.
+        If an agent fails, the run stops there so you can fix its input and
+        resume.
+      </p>
 
       {!projectId ? (
         <StartScreen
@@ -339,57 +400,33 @@ function PipelineBody({ initialProjectId }: { initialProjectId: string | null })
           onStart={start}
         />
       ) : (
-        <div className="space-y-5">
-          {/* Project + run HUD */}
-          <RunHud
-            projectName={projectName || "QA project"}
+        <div>
+          <ProjectCard
+            name={projectName || "QA project"}
             appUrl={appUrl}
-            phase={phase}
+          />
+
+          <StageTracker
+            stages={CHAIN_STAGES}
+            stageState={stageState}
+            doneCount={doneCount}
+            progress={progress}
             running={running}
             busy={busy}
-            doneCount={doneCount}
-            total={STAGES.length}
-            progress={progress}
-            blockedStage={blockedStage}
-            log={log}
             onCancel={cancelRun}
-            onToggleLog={() => setShowLog((v) => !v)}
-            showLog={showLog}
           />
 
           {error && (
-            <div className="qa-rise rounded-lg border border-[var(--bad)]/40 bg-[var(--bad)]/10 p-3 text-sm text-[var(--bad)]">
-              ✗ {error}
+            <div className="qa-rise mb-6 flex items-start gap-2 rounded-[var(--r-md)] border border-[var(--bad)]/30 bg-[var(--bad-soft)] p-3 text-[13px] text-[var(--bad)]">
+              <Icon name="alert" size={15} className="mt-0.5 shrink-0" />
+              <span>{error}</span>
             </div>
           )}
 
-          {/* Agent track */}
-          <div className="overflow-x-auto rounded-2xl border bg-[var(--bg-elev)] p-5 shadow-sm">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-bold uppercase tracking-widest text-[var(--ink-faint)]">
-                Agent chain
-              </p>
-              <TrackLegend stageState={stageState} />
-            </div>
-            <div ref={trackRef} className="flex min-w-max items-stretch gap-0">
-              {STAGES.map((s, i) => (
-                <TrackSegment
-                  key={s}
-                  stage={s}
-                  index={i}
-                  total={STAGES.length}
-                  state={stageState(s)}
-                  running={running}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Live activity strip */}
-          {running && <ActivityStrip log={log} currentStage={STAGES.find((s) => stageState(s) === "running") ?? null} />}
-
-          {/* Agent outputs / failure panel */}
-          <StageOutputs
+          {/* The run itself: one ordered row per agent. This is the only
+              representation of the chain — status, timing and output live
+              together, in execution order. */}
+          <RunList
             stages={stages}
             stageState={stageState}
             running={running}
@@ -404,7 +441,15 @@ function PipelineBody({ initialProjectId }: { initialProjectId: string | null })
             artifactCacheKey={projectId}
           />
 
-          {showLog && <PipelineLog logRef={logRef} log={log} running={running} />}
+          <RunLegend />
+
+          {/* Forensics, not a monitor: the ordered event trail stays available
+              but collapsed, and only advertises itself when it has entries. */}
+          {log.length > 0 && (
+            <div className="mt-6">
+              <EventTrail log={log} />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -429,46 +474,47 @@ function StartScreen({
   onStart: () => void;
 }) {
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_1.4fr]">
-      <div className="rounded-2xl border bg-[var(--bg-elev)] p-6 shadow-sm">
-        <span className="text-2xl">📦</span>
-        <label className="mt-3 block text-sm font-semibold text-[var(--ink)]">Project name</label>
+    <div className="grid gap-4 lg:grid-cols-[1fr_1.5fr]">
+      <div className="rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)] px-5 py-5">
+        <p className="field-label mb-2.5">project name</p>
         <input
           value={name}
           onChange={(e) => onName(e.target.value)}
           placeholder="My QA project"
-          className="mt-2 w-full rounded-lg border bg-[var(--bg)] px-3 py-2.5 text-sm outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+          className="w-full rounded-[var(--r-md)] border border-[var(--line-strong)] bg-[var(--bg)] px-3 py-2.5 text-[13px] outline-none transition-colors placeholder:text-[var(--ink-faint)] focus:border-[var(--accent)]"
         />
-        <p className="mt-3 text-xs leading-relaxed text-[var(--ink-faint)]">
-          Each pipeline run is stored under this project — reopen it anytime
-          from the dashboard to watch the full chain.
+        <p className="mt-3 text-[12px] leading-relaxed text-[var(--ink-faint)]">
+          Each run is stored under this project — reopen it any time from the
+          dashboard to watch the full chain.
         </p>
       </div>
 
-      <div className="rounded-2xl border bg-[var(--bg-elev)] p-6 shadow-sm">
-        <div className="flex items-center justify-between gap-2">
-          <label className="text-sm font-semibold text-[var(--ink)]">Requirement</label>
-          <span className="rounded-full bg-[var(--bg-sunken)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--ink-faint)]">
-            input
-          </span>
-        </div>
+      <div className="rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)] px-5 py-5">
+        <p className="field-label mb-2.5">requirement</p>
         <textarea
           value={requirement}
           onChange={(e) => onRequirement(e.target.value)}
           rows={7}
-          className="mt-2 w-full resize-y rounded-lg border bg-[var(--bg)] px-3 py-2.5 font-mono text-xs leading-relaxed outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
+          className="w-full resize-y rounded-[var(--r-md)] border border-[var(--line-strong)] bg-[var(--bg)] px-3 py-2.5 text-[12px] leading-relaxed outline-none transition-colors placeholder:text-[var(--ink-faint)] focus:border-[var(--accent)]"
+          style={{ fontFamily: "var(--font-mono)" }}
           placeholder={"Paste a requirement, Jira story, PRD…\n\nTip: include the app URL (e.g. https://www.saucedemo.com) — the pipeline will target it automatically."}
         />
         {detectUrl(requirement) ? (
-          <div className="mt-2 flex items-center gap-2 rounded-lg border border-[var(--ok)]/30 bg-[var(--ok)]/5 px-3 py-2">
-            <span className="text-xs">🎯</span>
-            <span className="text-xs text-[var(--ink-soft)]">
-              App under test: <span className="font-mono font-bold text-[var(--ok)]">{detectUrl(requirement)}</span>
+          <div className="mt-2.5 flex items-center gap-2 rounded-[var(--r-md)] border border-[var(--ok)]/30 bg-[var(--ok-soft)] px-3 py-2">
+            <Icon name="link" size={13} className="shrink-0 text-[var(--ok)]" />
+            <span className="text-[12px] text-[var(--ink-soft)]">
+              App under test:{" "}
+              <span
+                className="font-semibold text-[var(--ok)]"
+                style={{ fontFamily: "var(--font-mono)" }}
+              >
+                {detectUrl(requirement)}
+              </span>
             </span>
           </div>
         ) : (
-          <p className="mt-2 text-xs text-[var(--ink-faint)]">
-            No URL detected yet — the app under test will fall back to the
+          <p className="mt-2.5 text-[12px] leading-relaxed text-[var(--ink-faint)]">
+            No URL detected yet — the app under test falls back to the
             configured default. Paste a URL in the requirement to target a
             specific site.
           </p>
@@ -476,16 +522,16 @@ function StartScreen({
         <div className="mt-3">
           <JiraIssueFetcher onFetched={(_issue, text) => onRequirement(text)} />
         </div>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs text-[var(--ink-faint)]">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-4">
+          <p className="text-[12px] text-[var(--ink-faint)]">
             Leave empty to load the demo requirement fixture.
           </p>
           <button
             onClick={onStart}
             disabled={busy}
-            className="group inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2.5 text-sm font-bold text-[#fdfaf4] shadow-sm transition hover:bg-[var(--accent-strong)] disabled:opacity-50"
+            className="press inline-flex shrink-0 items-center gap-2 rounded-[var(--r-md)] bg-[var(--accent)] px-4 py-2.5 text-[13px] font-semibold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-50"
           >
-            {busy ? "Creating…" : "▶ Start pipeline"}
+            {busy ? "Creating…" : "Start pipeline"}
           </button>
         </div>
       </div>
@@ -493,331 +539,279 @@ function StartScreen({
   );
 }
 
-/* ---------------------------------- HUD ---------------------------------- */
+/* ------------------------------ run chrome ------------------------------- */
 
-function PhasePill({ phase }: { phase: string }) {
-  const map: Record<string, { label: string; cls: string; dot: string }> = {
-    running: { label: "Running", cls: "bg-[var(--accent-soft)] text-[var(--accent-strong)] border-[var(--accent)]/30", dot: "bg-[var(--accent)] animate-pulse" },
-    failed: { label: "Failed", cls: "bg-[var(--bad)]/10 text-[var(--bad)] border-[var(--bad)]/30", dot: "bg-[var(--bad)]" },
-    complete: { label: "Complete", cls: "bg-[var(--ok)]/10 text-[var(--ok)] border-[var(--ok)]/30", dot: "bg-[var(--ok)]" },
-    paused: { label: "Paused", cls: "bg-[var(--warn)]/10 text-[var(--warn)] border-[var(--warn)]/30", dot: "bg-[var(--warn)]" },
-    idle: { label: "Idle", cls: "bg-[var(--bg-sunken)] text-[var(--ink-faint)] border-[var(--line)]", dot: "bg-[var(--ink-faint)]" },
+function PhaseBadge({ phase }: { phase: string }) {
+  const map: Record<string, { label: string; tone: BadgeTone; pulse?: boolean }> = {
+    running: { label: "Running", tone: "accent", pulse: true },
+    failed: { label: "Failed", tone: "bad" },
+    complete: { label: "Complete", tone: "ok" },
+    paused: { label: "Paused", tone: "warn" },
+    idle: { label: "Idle", tone: "neutral" },
   };
   const m = map[phase] ?? map.idle;
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest ${m.cls}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${m.dot}`} />
-      {m.label}
-    </span>
+    <Badge tone={m.tone} dot>
+      <span className={m.pulse ? "qa-pulse" : undefined}>{m.label}</span>
+    </Badge>
   );
 }
 
-function RunHud({
-  projectName,
-  appUrl,
-  phase,
+/** Who this run belongs to and what it is pointed at. */
+function ProjectCard({ name, appUrl }: { name: string; appUrl: string }) {
+  return (
+    <div className="mb-5 rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)] px-5 py-4">
+      <p className="field-label mb-2">project</p>
+      <p
+        className="text-[20px] font-semibold leading-tight text-[var(--ink)]"
+        style={{ fontFamily: "var(--font-display)" }}
+      >
+        {name}
+      </p>
+      {appUrl && (
+        <p className="mt-1.5 flex items-center gap-2 text-[12.5px] text-[var(--ink-soft)]">
+          <Icon name="link" size={13} className="shrink-0 text-[var(--ink-faint)]" />
+          <span
+            className="truncate border-b border-dotted border-[var(--ink-faint)]"
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            {appUrl}
+          </span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Position in the run as a row of segments — one per agent, so the bar is a
+ * map as well as a progress reading. The running segment animates an
+ * indeterminate sweep (background-position, so it never touches layout).
+ */
+function StageTracker({
+  stages,
+  stageState,
+  doneCount,
+  progress,
   running,
   busy,
-  doneCount,
-  total,
-  progress,
-  blockedStage,
-  log,
   onCancel,
-  onToggleLog,
-  showLog,
 }: {
-  projectName: string;
-  appUrl: string;
-  phase: string;
+  stages: readonly ChainStage[];
+  stageState: (s: Stage) => string;
+  doneCount: number;
+  progress: number;
   running: boolean;
   busy: boolean;
-  doneCount: number;
-  total: number;
-  progress: number;
-  blockedStage: Stage | null;
-  log: LogEntry[];
   onCancel: () => void;
-  onToggleLog: () => void;
-  showLog: boolean;
 }) {
-  const barColor =
-    phase === "failed"
-      ? "bg-[var(--bad)]"
-      : phase === "complete"
-        ? "bg-[var(--ok)]"
-        : phase === "running"
-          ? "bg-[var(--accent)]"
-          : "bg-[var(--line-strong)]";
-
   return (
-    <div className="qa-rise overflow-hidden rounded-2xl border bg-[var(--bg-elev)] shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
-        <div className="min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-[var(--ink-faint)]">Project</p>
-          <p className="truncate text-base font-bold text-[var(--ink)]">{projectName}</p>
-          {appUrl && (
-            <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[var(--ink-soft)]">
-              <span>🎯</span>
-              <span className="truncate font-mono text-[var(--ok)]">{appUrl}</span>
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="mb-6 rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)] px-5 pb-4 pt-5">
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-[13.5px] text-[var(--ink-soft)]">
+          <b className="font-semibold text-[var(--ink)]">
+            {doneCount} of {stages.length}
+          </b>{" "}
+          agents complete
+        </p>
+        <div className="flex items-center gap-3">
+          <span
+            className="text-[13px] font-semibold text-[var(--ok)]"
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            {progress}%
+          </span>
           {running && (
             <button
               onClick={onCancel}
               disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--bad)]/40 px-3 py-1.5 text-xs font-bold text-[var(--bad)] transition hover:bg-[var(--bad)]/10 disabled:opacity-50"
+              className="press inline-flex items-center gap-1.5 rounded-[var(--r-sm)] border border-[var(--bad)]/35 px-2.5 py-1 text-[11.5px] font-semibold text-[var(--bad)] transition-colors hover:bg-[var(--bad-soft)] disabled:opacity-50"
             >
-              <span className="inline-block h-2 w-2 rounded-sm bg-[var(--bad)]" /> Stop run
+              <Icon name="close" size={11} />
+              Stop
             </button>
           )}
-          <button
-            onClick={onToggleLog}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--line-strong)] px-3 py-1.5 text-xs font-bold text-[var(--ink-soft)] transition hover:bg-[var(--bg-hover)]"
-          >
-            {showLog ? "Hide log" : "Show log"}
-          </button>
         </div>
       </div>
 
-      {/* Progress */}
-      <div className="px-5 pb-4">
-        <div className="mb-1.5 flex items-center justify-between text-[11px]">
-          <span className="font-semibold text-[var(--ink-soft)]">
-            {doneCount}/{total} agents done
-          </span>
-          <span className="font-bold tabular-nums text-[var(--ink-soft)]">{progress}%</span>
-        </div>
-        <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--bg-sunken)]">
-          <div
-            className={`h-full rounded-full transition-all duration-700 ${barColor} ${
-              phase === "running" ? "relative overflow-hidden" : ""
-            }`}
-            style={{ width: `${Math.max(progress, phase === "running" ? 4 : 0)}%` }}
-          >
-            {phase === "running" && <span className="qa-scan absolute inset-y-0 w-1/3 bg-white/40" />}
-          </div>
-        </div>
-        {blockedStage && (
-          <p className="mt-2 text-xs text-[var(--bad)]">
-            ✕ Stopped at <span className="font-bold">{LABELS[blockedStage].name}</span> — fix the
-            input below and resume.
-          </p>
-        )}
-        {log.length === 0 && running && (
-          <p className="mt-2 text-xs text-[var(--ink-faint)]">Warming up the agent chain…</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function TrackLegend({ stageState }: { stageState: (s: Stage) => string }) {
-  const anyRunning = STAGES.some((s) => stageState(s) === "running");
-  const anyFailed = STAGES.some((s) => stageState(s) === "blocked");
-  return (
-    <div className="flex flex-wrap items-center gap-3 text-[10px] font-semibold uppercase tracking-wide text-[var(--ink-faint)]">
-      <span className="flex items-center gap-1.5">
-        <span className="flex h-3 w-3 items-center justify-center rounded-full bg-[var(--ok)] text-[7px] text-white">✓</span> done
-      </span>
-      {anyRunning && (
-        <span className="flex items-center gap-1.5">
-          <span className="relative flex h-3 w-3">
-            <span className="qa-sonar absolute inline-flex h-full w-full rounded-full bg-[var(--accent)] opacity-60" />
-            <span className="relative inline-flex h-3 w-3 rounded-full bg-[var(--accent)]" />
-          </span> running
-        </span>
-      )}
-      {anyFailed && (
-        <span className="flex items-center gap-1.5">
-          <span className="flex h-3 w-3 items-center justify-center rounded-full bg-[var(--bad)] text-[7px] text-white">✕</span> failed
-        </span>
-      )}
-      <span className="flex items-center gap-1.5">
-        <span className="h-3 w-3 rounded-full border border-dashed border-[var(--line-strong)]" /> optional
-      </span>
-    </div>
-  );
-}
-
-/* --------------------------------- track --------------------------------- */
-
-function TrackSegment({
-  stage,
-  index,
-  total,
-  state,
-  running,
-}: {
-  stage: Stage;
-  index: number;
-  total: number;
-  state: string;
-  running: boolean;
-}) {
-  const isDone = DONE.has(state);
-  const isRunning = state === "running";
-  const isBlocked = state === "blocked";
-  const isAwaiting = state === "awaiting_approval";
-  const isPending = PENDING.has(state);
-  const isVisual = stage === "visual";
-
-  return (
-    <div className="flex items-center">
-      {/* Node */}
-      <div className="flex w-[104px] flex-col items-center px-1">
-        <div className="relative">
-          {/* status ring */}
-          <div
-            className={`flex h-14 w-14 items-center justify-center rounded-2xl border-2 text-xl transition-all duration-500 ${
-              isDone
-                ? "border-[var(--ok)] bg-[var(--ok)]/10 shadow-[0_0_0_3px_rgba(47,125,79,0.12)]"
-                : isRunning
-                  ? "border-[var(--accent)] bg-[var(--accent-soft)] shadow-[0_0_0_3px_rgba(193,87,58,0.15)]"
+      <div className="flex items-center gap-1">
+        {stages.map((s) => {
+          const state = stageState(s);
+          const done = DONE.has(state);
+          const isRunning = state === "running";
+          const isBlocked = state === "blocked";
+          return (
+            <span
+              key={s}
+              title={`${LABELS[s].name} — ${state.replace("_", " ")}`}
+              className={`h-1.5 flex-1 rounded-[3px] ${
+                done
+                  ? "bg-[var(--ok)]"
                   : isBlocked
-                    ? "border-[var(--bad)] bg-[var(--bad)]/10 shadow-[0_0_0_3px_rgba(185,28,28,0.12)]"
-                    : isAwaiting
-                      ? "border-[var(--warn)] bg-[var(--warn)]/10"
-                      : isVisual
-                        ? "border-dashed border-[var(--line-strong)] bg-[var(--bg-sunken)]/40"
-                        : "border-[var(--line)] bg-[var(--bg-sunken)]/50"
-            }`}
-          >
-            <span className={isPending ? "opacity-45 grayscale-[0.4]" : ""}>{LABELS[stage].icon}</span>
-
-            {/* running sonar */}
-            {isRunning && (
-              <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <span className="qa-sonar absolute h-14 w-14 rounded-2xl bg-[var(--accent)] opacity-30" />
-              </span>
-            )}
-            {isDone && (
-              <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border-2 border-[var(--bg-elev)] bg-[var(--ok)] text-[10px] font-black text-white shadow">
-                ✓
-              </span>
-            )}
-            {isBlocked && (
-              <span className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full border-2 border-[var(--bg-elev)] bg-[var(--bad)] text-[10px] font-black text-white shadow">
-                ✕
-              </span>
-            )}
-          </div>
-        </div>
-
-        <p className={`mt-2 text-center text-[11px] font-bold leading-tight ${isPending ? "text-[var(--ink-faint)]" : "text-[var(--ink)]"}`}>
-          {LABELS[stage].name}
-        </p>
-        <p className="mt-0.5 h-4 text-center text-[9px] leading-tight text-[var(--ink-faint)]">
-          {isRunning ? (
-            <span className="font-bold uppercase tracking-wide text-[var(--accent-strong)]">working…</span>
-          ) : isBlocked ? (
-            <span className="font-bold uppercase tracking-wide text-[var(--bad)]">failed</span>
-          ) : isDone ? (
-            "done"
-          ) : isVisual ? (
-            "optional"
-          ) : (
-            LABELS[stage].desc
-          )}
-        </p>
-
-        <span
-          className={`mt-1 rounded-full px-2 py-0.5 text-[9px] font-bold tabular-nums ${
-            isDone
-              ? "bg-[var(--ok)]/15 text-[var(--ok)]"
-              : isRunning
-                ? "bg-[var(--accent)]/15 text-[var(--accent-strong)]"
-                : isBlocked
-                  ? "bg-[var(--bad)]/15 text-[var(--bad)]"
-                  : "bg-[var(--bg-sunken)] text-[var(--ink-faint)]"
-          }`}
-        >
-          {String(index + 1).padStart(2, "0")}
-        </span>
+                    ? "bg-[var(--bad)]"
+                    : isRunning
+                      ? "bg-[var(--warn)]"
+                      : "bg-[var(--bg-sunken)]"
+              }`}
+            >
+              {isRunning && (
+                <span
+                  aria-hidden
+                  className="block h-full w-full rounded-[3px]"
+                  style={{
+                    backgroundImage:
+                      "linear-gradient(90deg, var(--warn) 0%, var(--warn) 55%, rgba(245,184,76,0.15) 55%)",
+                    backgroundSize: "200% 100%",
+                    animation: "qa-indeterminate 1.4s linear infinite",
+                  }}
+                />
+              )}
+            </span>
+          );
+        })}
       </div>
 
-      {/* Connector to next */}
-      {index < total - 1 && <Connector state={state} nextState={stateOfNext(index, total, stage)} />}
+      <div className="mt-2.5 flex items-center">
+        {stages.map((s, i) => (
+          <span
+            key={s}
+            className={`flex-1 text-center text-[10px] text-[var(--ink-faint)] ${
+              i === 0 ? "text-left" : i === stages.length - 1 ? "text-right" : ""
+            }`}
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            {LABELS[s].name}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
 
-/** tiny helper — we don't have next stage state here, so connector derives color from current segment. */
-function stateOfNext(_index: number, _total: number, _stage: Stage): string {
-  return "";
+function RunLegend() {
+  const items = [
+    { color: "var(--ok)", label: "Complete" },
+    { color: "var(--warn)", label: "Running" },
+    { color: "var(--bad)", label: "Failed — stops the run" },
+    { color: "var(--pending)", label: "Pending" },
+  ];
+  return (
+    <div className="mt-8 flex flex-wrap gap-6 border-t border-[var(--line)] pt-5">
+      {items.map((it) => (
+        <span
+          key={it.label}
+          className="flex items-center gap-2 text-[12px] text-[var(--ink-faint)]"
+        >
+          <span
+            aria-hidden
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ background: it.color }}
+          />
+          {it.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
-function Connector({ state, nextState }: { state: string; nextState: string }) {
-  void nextState;
-  const done = DONE.has(state);
-  const blocked = state === "blocked";
-  const runningNow = state === "running";
+/* ------------------------------- the run list ------------------------------ */
+
+/**
+ * One ordered row per agent. This replaces what used to be three separate
+ * views of the same seven stages (a horizontal chain, a two-column card grid,
+ * and a raw log). A pipeline is strictly sequential, so the honest layout is a
+ * single vertical list read top to bottom, where each row carries its own
+ * status, timing, output summary, and — when it fails — the controls to fix and
+ * resume it in place.
+ */
+
+type RowTone = "ok" | "accent" | "bad" | "warn" | "muted";
+
+function rowVisual(state: string): { label: string; tone: RowTone } {
+  if (DONE.has(state)) return { label: "complete", tone: "ok" };
+  if (state === "running") return { label: "running", tone: "warn" };
+  if (state === "blocked") return { label: "failed", tone: "bad" };
+  if (state === "awaiting_approval") return { label: "review", tone: "warn" };
+  return { label: "pending", tone: "muted" };
+}
+
+/** The circular node on the spine, one per agent. Running gets a spinner
+ * rather than a glyph, so motion alone communicates "in progress". */
+const NODE_TONE: Record<RowTone, string> = {
+  ok: "border-[var(--ok)]/40 bg-[var(--ok-soft)] text-[var(--ok)]",
+  accent: "border-[var(--accent-line)] bg-[var(--accent-soft)] text-[var(--accent)]",
+  bad: "border-[var(--bad)]/40 bg-[var(--bad-soft)] text-[var(--bad)]",
+  warn: "border-[var(--warn)]/40 bg-[var(--warn-soft)] text-[var(--warn)]",
+  muted: "border-[var(--line-strong)] bg-[var(--bg-sunken)] text-[var(--ink-faint)]",
+};
+
+const PILL_TONE: Record<RowTone, string> = {
+  ok: "bg-[var(--ok-soft)] text-[var(--ok)]",
+  accent: "bg-[var(--accent-soft)] text-[var(--accent)]",
+  bad: "bg-[var(--bad-soft)] text-[var(--bad)]",
+  warn: "bg-[var(--warn-soft)] text-[var(--warn)]",
+  muted: "bg-[var(--pending-soft)] text-[var(--ink-faint)]",
+};
+
+function StatusPill({ tone, label }: { tone: RowTone; label: string }) {
   return (
-    <div className="mx-1 flex w-7 shrink-0 items-center pb-7">
-      <div
-        className={`h-1 w-full rounded-full ${
-          blocked
-            ? "bg-[var(--bad)]"
-            : done || runningNow
-              ? "qa-flow-line text-[var(--ok)] bg-[var(--ok)]"
-              : "bg-[var(--line)]"
-        }`}
-        style={done || runningNow ? { backgroundImage: undefined } : undefined}
-      />
-      <svg className="-ml-1.5 h-3 w-3 shrink-0" viewBox="0 0 12 12" aria-hidden>
-        <path
-          d="M0 6h9M6 2l4 4-4 4"
+    <span
+      className={`rounded-[5px] px-2 py-[3px] text-[10.5px] font-semibold ${PILL_TONE[tone]}`}
+      style={{ fontFamily: "var(--font-mono)" }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function NodeGlyph({ tone, running }: { tone: RowTone; running: boolean }) {
+  if (running) {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" className="qa-spin" aria-hidden>
+        <circle
+          cx="8"
+          cy="8"
+          r="6"
           fill="none"
-          stroke={blocked ? "var(--bad)" : done || runningNow ? "var(--ok)" : "var(--line-strong)"}
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeDasharray="28"
+          strokeDashoffset="10"
         />
       </svg>
-    </div>
-  );
+    );
+  }
+  if (tone === "ok") return <Icon name="check" size={17} strokeWidth={2} />;
+  if (tone === "bad") return <Icon name="close" size={16} strokeWidth={2} />;
+  return null;
 }
 
-function ActivityStrip({ log, currentStage }: { log: LogEntry[]; currentStage: Stage | null }) {
-  const recent = log.slice(-3).reverse();
+/** How long this agent took, or has been taking. A running row ticks. */
+function StageTiming({
+  startedAt,
+  updatedAt,
+  active,
+}: {
+  startedAt?: string | null;
+  updatedAt?: string | null;
+  active: boolean;
+}) {
+  const elapsed = useElapsed(startedAt, active);
+  if (elapsed == null) return null;
+  const done = !active && updatedAt && startedAt;
+  const ms = done ? new Date(updatedAt).getTime() - new Date(startedAt).getTime() : elapsed;
   return (
-    <div className="qa-rise flex items-start gap-3 overflow-hidden rounded-2xl border border-[var(--accent)]/25 bg-gradient-to-r from-[var(--accent-soft)]/70 via-[var(--bg-elev)] to-[var(--bg-elev)] px-4 py-3">
-      <span className="relative mt-1 flex h-3 w-3 shrink-0">
-        <span className="qa-sonar absolute inline-flex h-full w-full rounded-full bg-[var(--accent)]" />
-        <span className="relative inline-flex h-3 w-3 rounded-full bg-[var(--accent)]" />
-      </span>
-      <div className="min-w-0 flex-1">
-        {currentStage ? (
-          <p className="text-xs font-bold text-[var(--accent-strong)]">
-            {LABELS[currentStage].icon} {LABELS[currentStage].name} —{" "}
-            {LABELS[currentStage].desc}
-          </p>
-        ) : (
-          <p className="text-xs font-bold text-[var(--accent-strong)]">Agents are executing…</p>
-        )}
-        {recent.length > 0 && (
-          <p className="mt-0.5 truncate text-xs text-[var(--ink-soft)]">
-            <span className="mr-1 text-[var(--ink-faint)]">
-              {new Date(recent[0].created_at).toLocaleTimeString()}
-            </span>
-            {recent[0].message}
-          </p>
-        )}
-      </div>
-      <div className="flex shrink-0 items-end gap-0.5 self-center">
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--accent)] [animation-delay:-0.2s]" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--accent)] [animation-delay:-0.1s]" />
-        <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[var(--accent)]" />
-      </div>
-    </div>
+    <span
+      className="shrink-0 text-[12px] tabular-nums text-[var(--ink-faint)]"
+      style={{ fontFamily: "var(--font-mono)" }}
+      title={startedAt ? `Started ${formatClock(startedAt)}` : undefined}
+    >
+      {formatDuration(ms)}
+    </span>
   );
 }
 
-/* --------------------------------- outputs --------------------------------- */
-
-function StageOutputs({
+function RunList({
   stages,
   stageState,
   running,
@@ -840,90 +834,113 @@ function StageOutputs({
   overrides: Record<string, Record<string, string>>;
   onOverride: (s: Stage, key: string, value: string) => void;
   busy: boolean;
-  onResume: (s: Stage) => void;
+  onResume: (s: ChainStage) => void;
   defaults?: { base_url?: string; runner_url?: string };
   artifactCacheKey: string | null;
 }) {
-  const visible = STAGES.filter(
-    (s) => s !== "visual" && !PENDING.has(stageState(s)),
-  );
-  const blocked = STAGES.find((s) => stageState(s) === "blocked") ?? null;
+  const completed = CHAIN_STAGES.filter((s) => DONE.has(stageState(s))).length;
 
   if (!started) {
     return (
-      <div className="rounded-2xl border border-dashed bg-[var(--bg-elev)]/60 p-8 text-center">
-        <p className="text-3xl">🎬</p>
-        <p className="mt-2 text-sm font-semibold text-[var(--ink-soft)]">
-          {running ? "Starting the agent chain…" : "Start the pipeline to run the agent chain."}
+      <div className="rounded-[var(--r-lg)] border border-dashed border-[var(--line-strong)] px-6 py-10 text-center">
+        <Icon name="pipeline" size={24} className="mx-auto block text-[var(--ink-faint)]" />
+        <p className="mt-2.5 text-[13px] font-semibold text-[var(--ink-soft)]">
+          {running ? "Starting the agent chain…" : "The agent chain has not run yet."}
         </p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-bold uppercase tracking-widest text-[var(--ink-faint)]">
-          Agent outputs
-        </p>
-        {visible.length > 0 && (
-          <span className="rounded-full bg-[var(--bg-sunken)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--ink-faint)]">
-            {visible.length} available
-          </span>
-        )}
+    <section aria-label="Agent run">
+      <div className="mb-3.5 flex items-baseline justify-between">
+        <h2
+          className="text-[15px] font-semibold text-[var(--ink)]"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
+          Agents
+        </h2>
+        <span
+          className="text-[12px] tabular-nums text-[var(--ink-faint)]"
+          style={{ fontFamily: "var(--font-mono)" }}
+        >
+          {completed} / {CHAIN_STAGES.length} complete
+        </span>
       </div>
 
-      {blocked && (
-        <BlockedPanel
-          stage={blocked}
-          error={stages[blocked]?.error ?? null}
-          requirement={requirement}
-          onRequirement={onRequirement}
-          overrides={overrides}
-          onOverride={onOverride}
-          busy={busy}
-          running={running}
-          onResume={() => onResume(blocked)}
-          defaults={defaults}
-        />
-      )}
-
-      <div className="grid gap-3 lg:grid-cols-2">
-        {STAGES.map((s) => {
-          if (s === "visual") return null;
-          const st = stageState(s);
-          if (PENDING.has(st)) return null;
-          return (
-            <StageCard
-              key={`${artifactCacheKey}-${s}`}
-              stage={s}
-              state={st}
-              artifactId={stages[s]?.output_artifact_id ?? null}
-            />
-          );
-        })}
-      </div>
-    </div>
+      {/* Each agent is its own card on a shared vertical spine, so the list
+          reads as one chain rather than a stack of unrelated panels. */}
+      <ol>
+        {CHAIN_STAGES.map((s, i) => (
+          <RunRow
+            key={`${artifactCacheKey}-${s}`}
+            stage={s}
+            ordinal={i + 1}
+            isLast={i === CHAIN_STAGES.length - 1}
+            state={stageState(s)}
+            startedAt={stages[s]?.started_at}
+            updatedAt={stages[s]?.updated_at}
+            artifactId={stages[s]?.output_artifact_id ?? null}
+            error={stages[s]?.error ?? null}
+            requirement={requirement}
+            onRequirement={onRequirement}
+            overrides={overrides}
+            onOverride={onOverride}
+            busy={busy}
+            running={running}
+            onResume={() => onResume(s)}
+            defaults={defaults}
+          />
+        ))}
+      </ol>
+    </section>
   );
 }
 
-function StageCard({
+function RunRow({
   stage,
+  ordinal,
+  isLast,
   state,
+  startedAt,
+  updatedAt,
   artifactId,
+  error,
+  requirement,
+  onRequirement,
+  overrides,
+  onOverride,
+  busy,
+  running,
+  onResume,
+  defaults,
 }: {
-  stage: Stage;
+  stage: ChainStage;
+  ordinal: number;
+  isLast: boolean;
   state: string;
+  startedAt?: string | null;
+  updatedAt?: string | null;
   artifactId: string | null;
+  error: string | null;
+  requirement: string;
+  onRequirement: (v: string) => void;
+  overrides: Record<string, Record<string, string>>;
+  onOverride: (s: Stage, key: string, value: string) => void;
+  busy: boolean;
+  running: boolean;
+  onResume: () => void;
+  defaults?: { base_url?: string; runner_url?: string };
 }) {
   const [payload, setPayload] = useState<Record<string, unknown> | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [artifactError, setArtifactError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  const isRunning = state === "running";
+  const { label, tone } = rowVisual(state);
   const isDone = DONE.has(state);
-  const isAwaiting = state === "awaiting_approval";
+  const isRunning = state === "running";
+  const isBlocked = state === "blocked";
 
   useEffect(() => {
     if (!artifactId || loaded) return;
@@ -936,7 +953,7 @@ function StageCard({
         }
       })
       .catch(() => {
-        if (!cancelled) setArtifactError("Could not load output");
+        if (!cancelled) setArtifactError("Could not load this agent's output");
       });
     return () => {
       cancelled = true;
@@ -944,299 +961,310 @@ function StageCard({
   }, [artifactId, loaded]);
 
   const summary = stageSummary(stage, payload);
-  const statusTone = isDone
-    ? "border-[var(--ok)]/40 bg-[var(--ok)]/[0.04]"
-    : isAwaiting
-      ? "border-[var(--warn)]/40 bg-[var(--warn)]/[0.04]"
-      : isRunning
-        ? "border-[var(--accent)]/40 bg-[var(--accent)]/[0.04]"
-        : "border bg-[var(--bg-elev)]";
+  const fields = STAGE_FIELDS[stage] ?? [];
+  const editableRequirement =
+    stage === "doctor" || stage === "test_cases" || stage === "codegen" || stage === "run";
 
   return (
-    <div className={`qa-rise overflow-hidden rounded-2xl border shadow-sm ${statusTone}`}>
-      <div className="flex items-start justify-between gap-3 p-4">
-        <div className="flex items-start gap-3">
+    <li
+      className="relative grid grid-cols-[44px_1fr] gap-[18px] pb-[26px] last:pb-0"
+      aria-current={isRunning ? "step" : undefined}
+    >
+      {/* Spine — one continuous line down the chain, hidden after the last
+          agent so the list does not trail off into nothing. */}
+      {!isLast && (
+        <span
+          aria-hidden
+          className="absolute bottom-[-2px] left-[22px] top-[44px] w-px bg-[var(--line-strong)]"
+        />
+      )}
+
+      {/* Node */}
+      <span
+        className={`relative z-10 flex h-11 w-11 items-center justify-center rounded-full border ${NODE_TONE[tone]}`}
+      >
+        <NodeGlyph tone={tone} running={isRunning} />
+      </span>
+
+      {/* Card */}
+      <div
+        className={`min-w-0 rounded-[var(--r-lg)] border bg-[var(--bg-elev)] px-[18px] py-4 ${
+          isBlocked
+            ? "border-[var(--bad)]/40"
+            : isRunning
+              ? "border-[var(--warn)]/35"
+              : "border-[var(--line)]"
+        }`}
+      >
+        <div className="mb-1.5 flex flex-wrap items-center gap-2.5">
           <span
-            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg ${
-              isDone
-                ? "bg-[var(--ok)]/15"
-                : isAwaiting
-                  ? "bg-[var(--warn)]/15"
-                  : isRunning
-                    ? "bg-[var(--accent)]/15"
-                    : "bg-[var(--bg-sunken)]"
-            }`}
+            className="text-[11.5px] tabular-nums text-[var(--ink-faint)]"
+            style={{ fontFamily: "var(--font-mono)" }}
           >
-            {LABELS[stage].icon}
+            {String(ordinal).padStart(2, "0")}
           </span>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm font-bold text-[var(--ink)]">{LABELS[stage].name}</p>
-              {isDone && (
-                <span className="rounded-full bg-[var(--ok)]/15 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-[var(--ok)]">
-                  complete
-                </span>
-              )}
-              {isAwaiting && (
-                <span className="rounded-full bg-[var(--warn)]/15 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-[var(--warn)]">
-                  review
-                </span>
-              )}
-            </div>
-            <p className="mt-0.5 text-xs text-[var(--ink-faint)]">{LABELS[stage].desc}</p>
-            {isRunning ? (
-              <p className="mt-1.5 flex items-center gap-1.5 text-[11px] font-bold text-[var(--accent-strong)]">
-                <span className="relative flex h-2 w-2">
-                  <span className="qa-sonar absolute inline-flex h-full w-full rounded-full bg-[var(--accent)]" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--accent)]" />
-                </span>
-                running
-              </p>
-            ) : summary ? (
-              <p className="mt-1 text-xs font-semibold text-[var(--ink-soft)]">{summary}</p>
-            ) : null}
-          </div>
-        </div>
-
-        {isDone && payload && (
-          <button
-            onClick={() => setExpanded((e) => !e)}
-            className="shrink-0 rounded-lg border border-[var(--line-strong)] px-2.5 py-1.5 text-[11px] font-bold text-[var(--ink-soft)] transition hover:bg-[var(--bg-hover)]"
+          <h3
+            className={`text-[15.5px] font-semibold ${
+              tone === "muted" ? "text-[var(--ink-soft)]" : "text-[var(--ink)]"
+            }`}
+            style={{ fontFamily: "var(--font-display)" }}
           >
-            {expanded ? "Hide" : "Details"}
-          </button>
-        )}
+            {LABELS[stage].name}
+          </h3>
+          <StatusPill tone={tone} label={label} />
+          <span className="ml-auto">
+            <StageTiming startedAt={startedAt} updatedAt={updatedAt} active={isRunning} />
+          </span>
+        </div>
+
+        <p className="mb-2.5 text-[13px] leading-relaxed text-[var(--ink-soft)]">
+          {LABELS[stage].desc}
+        </p>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* The one fact worth reading at a glance. */}
+          {isRunning ? (
+            <span className="text-[13px] text-[var(--ink-faint)]">
+              Evaluating results…
+            </span>
+          ) : summary ? (
+            <span className="qa-fade text-[13px] text-[var(--ink)]">{summary}</span>
+          ) : (
+            <span className="text-[13px] text-[var(--ink-faint)]">Waiting</span>
+          )}
+
+          {isDone && payload && (
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              className="press inline-flex shrink-0 items-center gap-1.5 rounded-[7px] border border-[var(--line-strong)] px-2.5 py-1.5 text-[12.5px] font-semibold text-[var(--ink-soft)] transition-colors hover:border-[var(--accent)] hover:text-[var(--ink)]"
+            >
+              {expanded ? "Hide output" : "View output"}
+              <Icon
+                name="arrow"
+                size={12}
+                className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}
+              />
+            </button>
+          )}
+        </div>
+
+          {artifactError && (
+            <p className="mt-2 flex items-center gap-1.5 text-[12px] text-[var(--bad)]">
+              <Icon name="alert" size={12} />
+              {artifactError}
+            </p>
+          )}
+
+          {/* Expanded output. The content stays mounted so the reveal animates
+              in both directions; collapsed means height 0, not unmounted, so
+              `inert` is what keeps it out of the tab order and a11y tree. */}
+          {isDone && payload && (
+            <div className="qa-collapse" data-open={expanded}>
+              <div>
+                <div
+                  className="mt-3.5 rounded-[var(--r-md)] border border-[var(--line)] bg-[var(--bg-inset)] p-3.5"
+                  inert={!expanded}
+                >
+                  <ArtifactView payload={payload} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Actions that belong to this agent's result. */}
+          {isDone && payload && stage === "codegen" && (
+            <div className="mt-3">
+              <GitHubPusher
+                files={githubFilesFromCodegen(payload)}
+                defaultPrefix="qa-one/suites"
+                buttonLabel="Push suite"
+              />
+            </div>
+          )}
+          {isDone && payload && stage === "release" && <ReleaseSummary payload={payload} />}
+
+          {/* Failure is fixed where it happened: error, the inputs to correct,
+              and resume — inline, not in a separate panel elsewhere. */}
+          {isBlocked && (
+            <div className="mt-3.5 space-y-3 rounded-[var(--r-md)] border border-[var(--bad)]/30 bg-[var(--bg-inset)] p-3.5">
+              {error && (
+                <div className="rounded-[var(--r-sm)] border border-[var(--bad)]/20 bg-[var(--bad-soft)] p-2.5">
+                  <p className="field-label mb-1.5 text-[var(--bad)]">error</p>
+                  <p
+                    className="text-[11.5px] leading-relaxed text-[var(--ink-soft)]"
+                    style={{ fontFamily: "var(--font-mono)" }}
+                  >
+                    {error}
+                  </p>
+                </div>
+              )}
+
+              {editableRequirement && (
+                <div>
+                  <label className="field-label block">requirement text</label>
+                  <textarea
+                    value={requirement}
+                    onChange={(e) => onRequirement(e.target.value)}
+                    rows={3}
+                    className="mt-1.5 w-full resize-y rounded-[var(--r-sm)] border border-[var(--line-strong)] bg-[var(--bg)] px-2.5 py-2 text-[11.5px] outline-none focus:border-[var(--accent)]"
+                    style={{ fontFamily: "var(--font-mono)" }}
+                  />
+                </div>
+              )}
+
+              {fields.length > 0 && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {fields.map((f) => {
+                    const envVal = f.envDefaultKey ? defaults?.[f.envDefaultKey] : undefined;
+                    // Empty override means "use the resolved default" — the
+                    // server filters empty overrides the same way.
+                    const effective = overrides[stage]?.[f.key] || envVal || "";
+                    return (
+                      <div key={f.key}>
+                        <label className="field-label flex items-center gap-1.5">
+                          {f.label}
+                          {f.key === "runner_url" && (
+                            <span className="rounded bg-[var(--bg-sunken)] px-1.5 py-px text-[9px] tracking-normal text-[var(--ink-faint)]">
+                              internal
+                            </span>
+                          )}
+                        </label>
+                        <input
+                          type={f.type ?? "text"}
+                          value={effective}
+                          onChange={(e) => onOverride(stage, f.key, e.target.value)}
+                          placeholder={f.placeholder ?? ""}
+                          className="mt-1.5 w-full rounded-[var(--r-sm)] border border-[var(--line-strong)] bg-[var(--bg)] px-2.5 py-2 text-[11.5px] outline-none focus:border-[var(--accent)]"
+                          style={{ fontFamily: "var(--font-mono)" }}
+                        />
+                        {f.key === "base_url" && (
+                          <p className="mt-1 text-[10.5px] leading-relaxed text-[var(--ink-faint)]">
+                            Detected from the requirement&apos;s URL. Change only to retarget.
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--line)] pt-3">
+                <p className="text-[11.5px] leading-relaxed text-[var(--ink-faint)]">
+                  Earlier agents stay complete — only this agent and the ones after it rerun.
+                </p>
+                <button
+                  onClick={onResume}
+                  disabled={busy || running}
+                  className="press inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-md)] bg-[var(--accent)] px-3.5 py-2 text-[12.5px] font-semibold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-50"
+                >
+                  <Icon name="runner" size={12} />
+                  {busy ? "Resuming…" : "Resume from here"}
+                </button>
+              </div>
+            </div>
+          )}
       </div>
-
-      {isDone && expanded && payload && (
-        <div className="border-t border-[var(--line)]/70 px-4 py-3">
-          <ArtifactView payload={payload} />
-        </div>
-      )}
-      {isDone && artifactError && (
-        <p className="px-4 pb-3 text-xs text-[var(--bad)]">✗ {artifactError}</p>
-      )}
-
-      {stage === "codegen" && isDone && payload && (
-        <div className="border-t border-[var(--line)]/70 px-4 py-3">
-          <GitHubPusher files={githubFilesFromCodegen(payload)} defaultPrefix="qa-one/suites" buttonLabel="Push suite" />
-        </div>
-      )}
-      {stage === "release" && isDone && payload && <ReleaseSummary payload={payload} />}
-    </div>
+    </li>
   );
 }
 
+/* --------------------------------- outputs --------------------------------- */
+
+/** The release verdict is the conclusion of the run, so it gets its own
+ * treatment rather than folding into the generic artifact view. */
 function ReleaseSummary({ payload }: { payload: Record<string, unknown> }) {
   const p = payload as { verdict?: string; reason?: string };
   const go = p.verdict === "GO";
   return (
-    <div className="border-t border-[var(--line)]/70 px-4 py-3">
+    <div className="mt-3">
       <div
-        className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 ${
-          go ? "border-[var(--ok)]/40 bg-[var(--ok)]/10" : "border-[var(--bad)]/40 bg-[var(--bad)]/10"
+        className={`flex items-center gap-3 rounded-[var(--r-md)] border px-4 py-3 ${
+          go ? "border-[var(--ok)]/35 bg-[var(--ok-soft)]" : "border-[var(--bad)]/35 bg-[var(--bad-soft)]"
         }`}
       >
-        <div className="flex items-center gap-3">
-          <span
-            className={`flex h-10 w-10 items-center justify-center rounded-full text-lg font-black text-white ${
-              go ? "bg-[var(--ok)]" : "bg-[var(--bad)]"
-            }`}
-          >
-            {go ? "GO" : "NO-GO"}
-          </span>
-          <div>
-            <p className={`text-sm font-black uppercase tracking-wide ${go ? "text-[var(--ok)]" : "text-[var(--bad)]"}`}>
-              {p.verdict ?? "NO_GO"}
-            </p>
-            {p.reason && <p className="mt-0.5 text-xs text-[var(--ink-soft)]">{p.reason}</p>}
-          </div>
-        </div>
-      </div>
-      <div className="mt-2">
-        <GitHubPusher files={githubFilesFromRelease(payload)} defaultPrefix="qa-one/reports" buttonLabel="Push report" />
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------- failure panel ------------------------------- */
-
-function BlockedPanel({
-  stage,
-  error,
-  requirement,
-  onRequirement,
-  overrides,
-  onOverride,
-  busy,
-  running,
-  onResume,
-  defaults,
-}: {
-  stage: Stage;
-  error: string | null;
-  requirement: string;
-  onRequirement: (v: string) => void;
-  overrides: Record<string, Record<string, string>>;
-  onOverride: (s: Stage, key: string, value: string) => void;
-  busy: boolean;
-  running: boolean;
-  onResume: () => void;
-  defaults?: { base_url?: string; runner_url?: string };
-}) {
-  const editableRequirement =
-    stage === "doctor" || stage === "test_cases" || stage === "codegen" || stage === "run";
-  const fields = STAGE_FIELDS[stage] ?? [];
-
-  return (
-    <div className="qa-rise overflow-hidden rounded-2xl border border-[var(--bad)]/40 bg-[var(--bad)]/[0.04] shadow-sm">
-      <div className="flex items-start gap-3 border-b border-[var(--bad)]/15 px-5 py-4">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--bad)] text-base font-black text-white shadow">
-          ✕
+        <span
+          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[13px] font-black tracking-tight text-white ${
+            go ? "bg-[var(--ok)]" : "bg-[var(--bad)]"
+          }`}
+        >
+          {go ? "GO" : "NO-GO"}
         </span>
         <div className="min-w-0">
-          <p className="text-sm font-black text-[var(--bad)]">
-            Pipeline stopped at {LABELS[stage].name}
+          <p
+            className={`text-[13px] font-semibold ${go ? "text-[var(--ok)]" : "text-[var(--bad)]"}`}
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            {go ? "Cleared to release" : "Not cleared to release"}
           </p>
-          <p className="mt-0.5 text-xs text-[var(--ink-soft)]">
-            The chain pauses at a failed agent instead of pushing bad output
-            downstream. Fix the input and resume — earlier agents stay done.
-          </p>
+          {p.reason && (
+            <p className="mt-0.5 text-[12.5px] leading-relaxed text-[var(--ink-soft)]">{p.reason}</p>
+          )}
         </div>
       </div>
-
-      <div className="space-y-4 px-5 py-4">
-        {error && (
-          <div className="rounded-xl border border-[var(--bad)]/25 bg-[#141210] p-3 font-mono text-[11px] leading-relaxed text-[#f0b9b9]">
-            {error}
-          </div>
-        )}
-
-        {editableRequirement && (
-          <div>
-            <label className="text-[10px] font-black uppercase tracking-widest text-[var(--ink-faint)]">
-              Requirement text
-            </label>
-            <textarea
-              value={requirement}
-              onChange={(e) => onRequirement(e.target.value)}
-              rows={4}
-              className="mt-1.5 w-full resize-y rounded-lg border bg-[var(--bg)] px-3 py-2 font-mono text-xs outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
-            />
-          </div>
-        )}
-
-        {fields.length > 0 && (
-          <div className="grid gap-3 sm:grid-cols-2">
-            {fields.map((f) => {
-              const envVal = f.envDefaultKey ? defaults?.[f.envDefaultKey] : undefined;
-              // Empty override means "use the resolved default" (the server
-              // filters empty overrides the same way).
-              const effective = overrides[stage]?.[f.key] || envVal || "";
-              return (
-                <div key={f.key}>
-                  <label className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-[var(--ink-faint)]">
-                    {f.label}
-                    {f.key === "runner_url" && (
-                      <span className="rounded bg-[var(--bg-sunken)] px-1.5 py-0.5 text-[9px] font-bold normal-case tracking-normal text-[var(--ink-faint)]">
-                        internal — where Playwright runs
-                      </span>
-                    )}
-                  </label>
-                  <input
-                    type={f.type ?? "text"}
-                    value={effective}
-                    onChange={(e) => onOverride(stage, f.key, e.target.value)}
-                    placeholder={f.placeholder ?? ""}
-                    className="mt-1.5 w-full rounded-lg border bg-[var(--bg)] px-3 py-2 font-mono text-xs outline-none transition focus:border-[var(--accent)] focus:ring-2 focus:ring-[var(--accent-soft)]"
-                  />
-                  {f.key === "base_url" && (
-                    <p className="mt-1 text-[10px] leading-relaxed text-[var(--ink-faint)]">
-                      The application being tested — detected from your requirement&apos;s URL.
-                      Edit only to override the target.
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="flex justify-end border-t border-[var(--bad)]/15 bg-[var(--bg-elev)]/50 px-5 py-3">
-        <button
-          onClick={onResume}
-          disabled={busy || running}
-          className="inline-flex items-center gap-2 rounded-lg bg-[var(--accent)] px-5 py-2 text-sm font-bold text-[#fdfaf4] shadow-sm transition hover:bg-[var(--accent-strong)] disabled:opacity-50"
-        >
-          {busy ? "Resuming…" : "▶ Resume from here"}
-        </button>
+      <div className="mt-3">
+        <GitHubPusher
+          files={githubFilesFromRelease(payload)}
+          defaultPrefix="qa-one/reports"
+          buttonLabel="Push report"
+        />
       </div>
     </div>
   );
 }
 
-/* ----------------------------------- log ----------------------------------- */
+/* -------------------------------- event trail ------------------------------- */
 
-function PipelineLog({
-  logRef,
-  log,
-  running,
-}: {
-  logRef: React.RefObject<HTMLDivElement | null>;
-  log: LogEntry[];
-  running: boolean;
-}) {
-  const levelColor = (level: string) => {
-    if (level === "error") return "text-[#f0b9b9]";
-    if (level === "success") return "text-[#8fd0a8]";
-    if (level === "warn") return "text-[#e5c07b]";
-    return "text-[#b9b2a6]";
+/**
+ * The ordered event stream, collapsed at the foot of the page. It exists for
+ * forensics — reconstructing exactly what happened and when — not for watching
+ * the run. Everything it would tell you at a glance is already on the agent
+ * rows above, and the live status line covers "what is happening right now".
+ */
+function EventTrail({ log }: { log: LogEntry[] }) {
+  const levelDot: Record<string, string> = {
+    error: "bg-[var(--bad)]",
+    success: "bg-[var(--ok)]",
+    warn: "bg-[var(--warn)]",
+    info: "bg-[var(--ink-faint)]",
   };
 
   return (
-    <div className="qa-rise overflow-hidden rounded-2xl border bg-[var(--bg-elev)] shadow-sm">
-      <div className="flex items-center justify-between border-b border-[var(--line)] bg-[#141210] px-4 py-2.5">
-        <p className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-[#8a8378]">
-          <span className="flex gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#f0574f]" />
-            <span className="h-2.5 w-2.5 rounded-full bg-[#e5c07b]" />
-            <span className="h-2.5 w-2.5 rounded-full bg-[#8fd0a8]" />
-          </span>
-          Run log
-        </p>
-        {running && (
-          <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-[#c1573a]">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)]" />
-            streaming
-          </span>
-        )}
-      </div>
-      <div
-        ref={logRef}
-        className="h-72 overflow-auto bg-[#141210] px-4 py-3 font-mono text-[11px] leading-relaxed"
-      >
-        {log.length === 0 && (
-          <p className="text-[#8a8378]">No events yet — start the pipeline.</p>
-        )}
-        {log.map((entry, i) => {
-          const ts = new Date(entry.created_at).toLocaleTimeString();
-          const last = i === log.length - 1 && running;
-          return (
-            <div
-              key={entry.id}
-              className={`flex gap-2 whitespace-pre-wrap py-0.5 ${last ? "text-[#fdfaf4]" : ""} ${!last ? "opacity-90" : ""}`}
-            >
-              <span className="shrink-0 text-[#5c5649]">{ts}</span>
-              {entry.stage && (
-                <span className="shrink-0 rounded bg-white/5 px-1.5 text-[#8a8378]">{entry.stage}</span>
-              )}
-              <span className={levelColor(entry.level)}>{entry.message}</span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <details className="overflow-hidden rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)]">
+      <summary className="flex cursor-pointer select-none flex-wrap items-center gap-2 px-4 py-2.5 text-[11.5px] font-bold text-[var(--ink-soft)] transition-colors hover:bg-[var(--bg-hover-elev)]">
+        <Icon name="arrow" size={12} className="chev" />
+        Event trail
+        <span className="font-mono text-[11px] font-normal tabular-nums text-[var(--ink-faint)]">
+          {log.length} event{log.length === 1 ? "" : "s"}
+        </span>
+        <span className="ml-auto hidden text-[11px] font-normal text-[var(--ink-faint)] sm:block">
+          Timestamped record of the run
+        </span>
+      </summary>
+      <ol className="max-h-80 overflow-auto border-t border-[var(--line)] bg-[var(--bg-inset)] px-4 py-3">
+        {log.map((entry) => (
+          <li
+            key={entry.id}
+            className="flex items-baseline gap-2.5 py-[3px] font-mono text-[11px] leading-relaxed"
+          >
+            <span className="shrink-0 tabular-nums text-[var(--ink-faint)]">
+              {new Date(entry.created_at).toLocaleTimeString()}
+            </span>
+            <span
+              aria-hidden
+              className={`h-1.5 w-1.5 shrink-0 translate-y-[-1px] rounded-full ${
+                levelDot[entry.level] ?? levelDot.info
+              }`}
+            />
+            {entry.stage && (
+              <span className="shrink-0 rounded bg-[var(--bg-sunken)] px-1.5 text-[var(--ink-soft)]">
+                {entry.stage}
+              </span>
+            )}
+            <span className="text-[var(--ink-soft)]">{entry.message}</span>
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 }

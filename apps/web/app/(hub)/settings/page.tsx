@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { Badge } from "@/components/badge";
 import {
   getSettings,
   saveSettings,
@@ -9,6 +10,7 @@ import {
   testJira,
   type SettingsGroups,
 } from "@/lib/api";
+import { Icon, type IconName } from "@/lib/icons";
 
 const MASK = "********";
 
@@ -28,7 +30,7 @@ function ConnectorCard({
   children,
 }: {
   title: string;
-  icon: string;
+  icon: IconName;
   fields: { key: string; label: string; type?: "password" | "text" }[];
   values: Record<string, string>;
   onChange: (key: string, value: string) => void;
@@ -39,8 +41,9 @@ function ConnectorCard({
   return (
     <div className="rounded-xl border bg-[var(--bg-elev)] p-5 shadow-sm">
       <div className="flex items-center justify-between">
-        <h2 className="text-base font-bold">
-          {icon} {title}
+        <h2 className="flex items-center gap-2 text-base font-bold">
+          <Icon name={icon} size={17} className="text-[var(--ink-soft)]" />
+          {title}
         </h2>
         <button
           onClick={onTest}
@@ -134,7 +137,9 @@ export default function SettingsPage() {
       } else {
         const res = await testGithub();
         if (res.ok) {
-          set({ status: "ok", message: `Authenticated as ${res.user} · ${res.full_name ?? res.repo ?? ""}` });
+          const repo = res.full_name ? ` · ${res.full_name}` : "";
+          const branch = res.default_branch ? ` (${res.default_branch})` : "";
+          set({ status: "ok", message: `Authenticated as ${res.user ?? "user"}${repo}${branch}` });
         } else {
           set({ status: "error", message: res.error ?? "Connection failed" });
         }
@@ -145,66 +150,76 @@ export default function SettingsPage() {
   };
 
   if (!loaded) {
-    return <div className="text-sm text-[var(--ink-faint)]">Loading settings…</div>;
+    return <div className="text-[13px] text-[var(--ink-faint)]">Loading settings…</div>;
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <header>
-        <p className="text-xs font-semibold uppercase tracking-widest text-[var(--accent)]">
+    <div className="mx-auto max-w-[900px]">
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Badge tone="accent" dot>
           Settings
-        </p>
-        <h1 className="mt-1 text-3xl font-bold tracking-tight">Connections</h1>
-        <p className="mt-2 text-sm leading-relaxed text-[var(--ink-soft)]">
-          Store your Jira and GitHub credentials so the platform can pull
-          requirements and push code. Secrets are masked on read.
-        </p>
-      </header>
-
-      <ConnectorCard
-        title="Jira"
-        icon="📋"
-        fields={[
-          { key: "url", label: "Jira URL" },
-          { key: "email", label: "Email" },
-          { key: "api_token", label: "API token", type: "password" },
-        ]}
-        values={jira}
-        onChange={setJiraField}
-        onTest={() => runTest("jira")}
-        test={jiraTest}
-      />
-
-      <ConnectorCard
-        title="GitHub"
-        icon="🐙"
-        fields={[
-          { key: "token", label: "Personal access token", type: "password" },
-          { key: "repo", label: "Repo (owner/repo)" },
-          { key: "branch", label: "Branch" },
-        ]}
-        values={github}
-        onChange={setGithubField}
-        onTest={() => runTest("github")}
-        test={githubTest}
-      />
-
-      <div className="flex items-center gap-3">
-        <button
-          onClick={save}
-          disabled={saving}
-          className="rounded-md bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-[#fdfaf4] hover:bg-[var(--accent-strong)] disabled:opacity-50"
-        >
-          {saving ? "Saving…" : "Save settings"}
-        </button>
-        {savedMsg && <span className="text-sm text-[var(--ink-soft)]">{savedMsg}</span>}
+        </Badge>
       </div>
 
-      <p className="text-xs text-[var(--ink-faint)]">
-        Tip: saved values are stored in the app database and seed from{" "}
-        <code className="rounded bg-[var(--bg-sunken)] px-1">services/api/.env</code> on first
-        run. A field showing {MASK} keeps its stored secret when you save.
+      <h1 className="text-[30px] font-semibold leading-tight text-[var(--ink)]">
+        Connections
+      </h1>
+      <p className="mb-7 mt-2.5 max-w-[62ch] text-[14px] leading-relaxed text-[var(--ink-soft)]">
+        Store your Jira and GitHub credentials so the platform can pull
+        requirements and push code. Secrets are masked on read.
       </p>
+
+      <div className="space-y-5">
+        <ConnectorCard
+          title="Jira"
+          icon="intake"
+          fields={[
+            { key: "url", label: "Jira URL" },
+            { key: "email", label: "Email" },
+            { key: "api_token", label: "API token", type: "password" },
+          ]}
+          values={jira}
+          onChange={setJiraField}
+          onTest={() => runTest("jira")}
+          test={jiraTest}
+        />
+
+        <ConnectorCard
+          title="GitHub"
+          icon="link"
+          fields={[
+            { key: "token", label: "Personal access token", type: "password" },
+            { key: "repo", label: "Repo (owner/repo)" },
+            { key: "branch", label: "Branch" },
+          ]}
+          values={github}
+          onChange={setGithubField}
+          onTest={() => runTest("github")}
+          test={githubTest}
+        />
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="press rounded-[var(--r-md)] bg-[var(--accent)] px-5 py-2.5 text-[13px] font-semibold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save settings"}
+          </button>
+          {savedMsg && (
+            <span className="text-[12.5px] text-[var(--ink-soft)]">{savedMsg}</span>
+          )}
+        </div>
+
+        <p className="text-[12px] leading-relaxed text-[var(--ink-faint)]">
+          Tip: saved values are stored in the app database and seed from{" "}
+          <code className="rounded-[3px] bg-[var(--bg-sunken)] px-1.5 py-0.5 text-[11px] text-[var(--ink-soft)]">
+            services/api/.env
+          </code>{" "}
+          on first run. A field showing {MASK} keeps its stored secret when you
+          save.
+        </p>
+      </div>
     </div>
   );
 }

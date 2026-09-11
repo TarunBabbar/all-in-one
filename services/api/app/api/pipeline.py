@@ -85,6 +85,8 @@ async def get_pipeline_state(
             "state": run.state.value if run else "not_started",
             "output_artifact_id": run.output_artifact_id if run else None,
             "error": run.error if run else None,
+            "started_at": run.created_at.isoformat() if run else None,
+            "updated_at": run.updated_at.isoformat() if run else None,
         }
     return {
         "project_id": project_id,
@@ -200,6 +202,10 @@ async def get_pipeline_status(
             "state": run.state.value if run else "not_started",
             "output_artifact_id": run.output_artifact_id if run else None,
             "error": run.error if run else None,
+            # Timing lets the UI show how long a stage took (or has been
+            # running) without the client reconstructing it from events.
+            "started_at": run.created_at.isoformat() if run else None,
+            "updated_at": run.updated_at.isoformat() if run else None,
         }
 
     events = await store.list_events(session, project_id, since_id=since_id)
