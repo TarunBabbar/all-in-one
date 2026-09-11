@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { ArtifactView } from "@/components/artifact-view";
 import { Badge } from "@/components/badge";
+import { useEngine } from "@/components/engine-catalog-provider";
 import { GitHubPusher } from "@/components/github-pusher";
 import { JiraIssueFetcher } from "@/components/jira-issue-fetcher";
 import { Icon } from "@/lib/icons";
@@ -41,6 +42,7 @@ const INPUT_CLASS =
  */
 export function ToolWorkspace({ toolId }: { toolId: string }) {
   const def = TOOL_FORMS[toolId];
+  const engine = useEngine(toolId);
   const meta = TOOLS.find((t) => t.id === toolId);
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries((def?.fields ?? []).map((f) => [f.name, f.default ?? ""])),
@@ -124,10 +126,10 @@ export function ToolWorkspace({ toolId }: { toolId: string }) {
       </div>
 
       <h1 className="text-[30px] font-semibold leading-tight text-[var(--ink)]">
-        {def.title}
+        {engine.name}
       </h1>
       <p className="mb-7 mt-2.5 max-w-[62ch] text-[14px] leading-relaxed text-[var(--ink-soft)]">
-        {def.description}
+        {engine.description}
       </p>
 
       <div className="space-y-5">

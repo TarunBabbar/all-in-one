@@ -133,7 +133,7 @@ def register_engines() -> None:
     register(
         Engine(
             id="a11y",
-            name="Accessibility",
+            name="Check Accessibility",
             description="WCAG 2.0/2.1 scan of HTML: labels, contrast, "
             "keyboard traps, with concrete fixes.",
             uses_llm=False,

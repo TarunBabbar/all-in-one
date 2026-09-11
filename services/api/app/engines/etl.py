@@ -90,9 +90,9 @@ def register_engines() -> None:
     register(
         Engine(
             id="etl",
-            name="ETL / Data QA",
-            description="Plain-English data rules -> runnable pytest against "
-            "an injected schema, plus format validation.",
+            name="Check Data Rules",
+            description="Turn plain-English data rules into runnable pytest "
+            "against an injected schema, plus format validation.",
             uses_llm=True,
             run=_etl,
         )

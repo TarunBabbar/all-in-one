@@ -4,8 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import {
+  EngineCatalogProvider,
+  useEngineCatalog,
+} from "@/components/engine-catalog-provider";
 import { Icon } from "@/lib/icons";
 import { API_URL } from "@/lib/api";
+import { engineName, type EngineCatalog } from "@/lib/engine-catalog";
 import { TOOLS, TOOL_GROUPS, type ToolDef } from "@/lib/tools";
 
 /* ---------------------------------------------------------------------------
@@ -15,6 +20,8 @@ import { TOOLS, TOOL_GROUPS, type ToolDef } from "@/lib/tools";
  * Tools are grouped in the order the work actually happens — author the tests,
  * automate them, analyse the results, decide on the release — so scanning the
  * sidebar teaches the process.
+ *
+ * Names come from the engine catalog, so a tool is named once, in the engine.
  * ------------------------------------------------------------------------ */
 
 function isActive(pathname: string, href: string) {
@@ -22,6 +29,7 @@ function isActive(pathname: string, href: string) {
 }
 
 function NavItem({ tool, active }: { tool: ToolDef; active: boolean }) {
+  const catalog = useEngineCatalog();
   return (
     <Link
       href={tool.href}
@@ -39,7 +47,7 @@ function NavItem({ tool, active }: { tool: ToolDef; active: boolean }) {
           active ? "text-[var(--accent)]" : "text-[var(--ink-faint)]"
         }`}
       />
-      <span className="truncate">{tool.name}</span>
+      <span className="truncate">{engineName(catalog, tool.id)}</span>
     </Link>
   );
 }
@@ -178,6 +186,7 @@ function Sidebar({ pathname }: { pathname: string }) {
 /** Small screens get the same destinations in a horizontal rail under the
  * brand bar, so no tool becomes unreachable on a narrow viewport. */
 function MobileNav({ pathname }: { pathname: string }) {
+  const catalog = useEngineCatalog();
   return (
     <div className="sticky top-0 z-30 border-b border-[var(--line)] bg-[var(--bg-elev)]/95 backdrop-blur-sm lg:hidden">
       <div className="flex h-14 items-center justify-between gap-3 px-4">
@@ -209,7 +218,7 @@ function MobileNav({ pathname }: { pathname: string }) {
               }`}
             >
               <Icon name={t.icon} size={14} />
-              {t.name}
+              {engineName(catalog, t.id)}
             </Link>
           );
         })}
@@ -218,14 +227,14 @@ function MobileNav({ pathname }: { pathname: string }) {
   );
 }
 
-/** Breadcrumb derived from the route — the last known tool name, or the
+/** Breadcrumb derived from the route — the current tool's engine name, or the
  * first path segment when the route is not a registered tool. */
 function Topbar({ pathname }: { pathname: string }) {
+  const catalog = useEngineCatalog();
   const tool = TOOLS.find((t) => isActive(pathname, t.href));
-  const segment =
-    tool?.name ??
-    (pathname.split("/").filter(Boolean)[0] ?? "Overview");
-  const crumb = segment.charAt(0).toUpperCase() + segment.slice(1);
+  const segment = tool
+    ? engineName(catalog, tool.id)
+    : (pathname.split("/").filter(Boolean)[0] ?? "Overview");
 
   return (
     <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3.5 sm:px-9">
@@ -233,7 +242,7 @@ function Topbar({ pathname }: { pathname: string }) {
         className="truncate text-[12.5px] text-[var(--ink-faint)]"
         style={{ fontFamily: "var(--font-mono)" }}
       >
-        QA/One / <b className="font-medium text-[var(--ink-soft)]">{crumb}</b>
+        QA/One / <b className="font-medium text-[var(--ink-soft)]">{segment}</b>
       </p>
       <span
         aria-hidden
@@ -250,28 +259,31 @@ function Topbar({ pathname }: { pathname: string }) {
 }
 
 export default function HubLayout({
+  catalog,
   children,
-}: Readonly<{ children: React.ReactNode }>) {
+}: Readonly<{ catalog: EngineCatalog; children: React.ReactNode }>) {
   const pathname = usePathname();
 
   return (
-    <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
-      <a
-        href="#main"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-[var(--r-md)] focus:bg-[var(--bg-elev)] focus:px-3 focus:py-2 focus:text-[13px] focus:font-semibold focus:shadow-[var(--shadow-lg)]"
-      >
-        Skip to content
-      </a>
+    <EngineCatalogProvider catalog={catalog}>
+      <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-50 focus:rounded-[var(--r-md)] focus:bg-[var(--bg-elev)] focus:px-3 focus:py-2 focus:text-[13px] focus:font-semibold focus:shadow-[var(--shadow-lg)]"
+        >
+          Skip to content
+        </a>
 
-      <Sidebar pathname={pathname} />
+        <Sidebar pathname={pathname} />
 
-      <div className="lg:pl-[248px]">
-        <MobileNav pathname={pathname} />
-        <Topbar pathname={pathname} />
-        <main id="main" className="px-4 py-7 pb-20 sm:px-9">
-          {children}
-        </main>
+        <div className="lg:pl-[248px]">
+          <MobileNav pathname={pathname} />
+          <Topbar pathname={pathname} />
+          <main id="main" className="px-4 py-7 pb-20 sm:px-9">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </EngineCatalogProvider>
   );
 }

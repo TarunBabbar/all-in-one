@@ -55,29 +55,42 @@ of the platform works without it.
 
 ## Features
 
-QA/One merges **15 engines**, each covering one capability. Every engine is a
-registered plugin with typed inputs/outputs, so it can run standalone (tool
-page) or as a stage in the Pipeline.
+QA/One registers **20 engines**. Every engine is a plugin with typed
+inputs/outputs, so it runs standalone (tool page) or as a stage in the Pipeline.
+
+Names describe the operation — verb first — so a tool says what it does. An
+engine is named once, in `services/api/app/engines/*.py`; the UI reads those
+names from `GET /engines`, so the sidebar, the tool page and the pipeline can
+never disagree.
 
 | # | Engine | What it does |
 |---|---|---|
-| — | **Pipeline** | Chains stages end-to-end with a human **approval gate** between each (requirement → verdict) |
-| E1 | **Intake** | Normalizes a raw requirement (text / URL / Jira / PRD / PDF) into a structured artifact |
-| E2 | **Requirement Doctor** | Scores requirement quality (0–100), lists ambiguity/incompleteness findings, rewrites on request |
-| E3 | **Test Case Generator** | Requirement → typed, prioritized test cases (functional/negative/edge/security) with a stable contract |
-| E4 | **Playwright CodeGen** | Approved cases → a runnable, selector-grounding-tagged Playwright TS suite |
-| E5 | **Test Runner** | Dispatches the generated suite to the sandboxed Playwright worker and returns per-test evidence |
-| E6 | **Failure Triage** | Clusters failures into root causes; evidence-cited diagnoses pass a deterministic hallucination guard |
-| E7 | **Visual Regression** | Compares legacy-vs-new screenshots: severity findings, match score, ship/don't-ship verdict |
-| E8 | **Accessibility** | WCAG 2.0/2.1 scan of HTML: labels, contrast, keyboard traps, with concrete fixes |
-| E9 | **API Tester** | Risk-scored endpoint analysis + test-gap ideas + optional live request execution |
-| E10 | **ETL / Data QA** | Plain-English data rules → runnable pytest against an injected schema |
-| E11 | **Release Gate** | GO/NO-GO release decision from run results + configurable criteria |
-| E12 | **Defect Leakage** | Classifies post-release defects as missed/not-missed and proposes preventive tests |
-| — | **RAG Explorer** | Visible retrieve-then-generate over a document (browse/edit chunks, top-K) |
-| — | **Agent Security** | Validates an AI agent's tool calls against the expected path → trust score + findings |
-| — | **Prompt Eval** | Golden-set prompt tests + OWASP LLM red-team attacks with pass/safe reporting |
-| — | **Demo** | Seeds a sample requirement + run results so everything is exercisable offline |
+| — | **Pipeline** | Chains stages end-to-end, with a check after every generator (requirement → verdict) |
+| E1 | **Normalize Requirement** | Clean a raw requirement (text / URL / Jira / PRD / PDF) into a typed artifact |
+| E2 | **Check Requirement** | Score requirement quality against deterministic rules and list the findings |
+| E3 | **Plan Tests** | Turn a requirement into testable criteria plus a category matrix |
+| — | **Check Plan** | Verify the plan covers every stated criterion without inventing scope |
+| E4 | **Generate Test Cases** | Plan-conformant, traceable cases across positive, negative and edge |
+| — | **Check Cases** | Verify cases conform to the plan and trace back to a criterion |
+| E5 | **Generate Playwright Code** | Approved cases → a runnable Playwright + TypeScript POM suite |
+| — | **Check Code** | Verify case coverage, locator grounding and a runnable scaffold |
+| E6 | **Run Tests** | Execute in the sandbox, heal broken locators, report per-test evidence |
+| E7 | **Cluster Failures** | Group failures by message similarity; evidence-cited root causes |
+| E8 | **Compare Screenshots** | Diff legacy-vs-new screenshots: severity findings, ship/don't-ship |
+| E9 | **Check Accessibility** | WCAG 2.0/2.1 scan of HTML: labels, contrast, keyboard traps |
+| E10 | **Test API Endpoints** | Risk-scored endpoint analysis + test-gap ideas + live requests |
+| E11 | **Check Data Rules** | Plain-English data rules → runnable pytest against an injected schema |
+| E12 | **Assess Release** | GO/NO-GO from run evidence, self-heal outcomes and check results |
+| E13 | **Analyze Defect Leakage** | Classify post-release defects and propose preventive tests |
+| — | **Query Documents** | Visible retrieve-then-generate over a document |
+| — | **Validate Tool Calls** | Check an AI agent's tool calls against the expected path |
+| — | **Evaluate Prompts** | Golden-set prompt tests + OWASP LLM red-team attacks |
+| — | **Demo Data** | Seeds a sample requirement + run results so everything runs offline |
+
+**Checks are deterministic.** The four `Check *` engines involve no model, so
+they cost no tokens and run offline; each returns per-metric scores with the
+threshold it was measured against and a reason. A failed check stops the chain
+rather than letting weak output reach automation.
 
 ### Cross-cutting trust layer
 

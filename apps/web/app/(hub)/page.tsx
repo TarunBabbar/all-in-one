@@ -1,8 +1,10 @@
 import Link from "next/link";
 
 import { Badge } from "@/components/badge";
-import { Icon, type IconName } from "@/lib/icons";
+import { Icon } from "@/lib/icons";
 import { API_URL, type Project } from "@/lib/api";
+import { engineDescription, engineName, getEngineCatalog } from "@/lib/engine-catalog";
+import { CHAIN_STAGES } from "@/lib/stages";
 import { PIPELINE, TOOL_GROUPS } from "@/lib/tools";
 
 async function getProjects(): Promise<Project[]> {
@@ -14,18 +16,6 @@ async function getProjects(): Promise<Project[]> {
     return [];
   }
 }
-
-/* The seven stages of the flagship flow — the product's identity, so it gets
-   the one piece of composed visual the page carries. */
-const STAGES: { icon: IconName; label: string }[] = [
-  { icon: "intake", label: "Intake" },
-  { icon: "doctor", label: "Doctor" },
-  { icon: "cases", label: "Cases" },
-  { icon: "codegen", label: "CodeGen" },
-  { icon: "runner", label: "Run" },
-  { icon: "triage", label: "Triage" },
-  { icon: "release", label: "Release" },
-];
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -42,7 +32,7 @@ function relativeTime(iso: string): string {
 }
 
 export default async function Home() {
-  const projects = await getProjects();
+  const [projects, catalog] = await Promise.all([getProjects(), getEngineCatalog()]);
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -78,9 +68,9 @@ export default async function Home() {
               className="text-[15px] font-semibold text-[var(--ink)]"
               style={{ fontFamily: "var(--font-display)" }}
             >
-              {PIPELINE.name}
+              {engineName(catalog, PIPELINE.id)}
             </h2>
-            <Badge>7 agents</Badge>
+            <Badge>{CHAIN_STAGES.length} stages</Badge>
           </div>
           <Link
             href={PIPELINE.href}
@@ -91,9 +81,9 @@ export default async function Home() {
         </div>
 
         <ol className="flex flex-wrap items-stretch gap-y-3 px-5 py-4">
-          {STAGES.map((stage, i) => (
+          {CHAIN_STAGES.map((stage, i) => (
             <li
-              key={stage.label}
+              key={stage.stage}
               className="qa-rise flex items-center"
               style={{ animationDelay: `${i * 45}ms` }}
             >
@@ -102,13 +92,13 @@ export default async function Home() {
                   <Icon name={stage.icon} size={15} />
                 </span>
                 <span
-                  className="text-[10px] text-[var(--ink-faint)]"
+                  className="max-w-[76px] text-center text-[10px] leading-tight text-[var(--ink-faint)]"
                   style={{ fontFamily: "var(--font-mono)" }}
                 >
-                  {stage.label}
+                  {engineName(catalog, stage.engine)}
                 </span>
               </div>
-              {i < STAGES.length - 1 && (
+              {i < CHAIN_STAGES.length - 1 && (
                 <span
                   aria-hidden
                   className="mx-2 mb-5 h-px w-6 shrink-0 bg-[var(--line-strong)] sm:w-9"
@@ -119,10 +109,10 @@ export default async function Home() {
         </ol>
 
         <p className="border-t border-[var(--line)] px-5 py-3 text-[12.5px] leading-relaxed text-[var(--ink-soft)]">
-          Diagnosis scores the requirement before anything is built, every stage
-          checks its own output, and the release verdict is computed from run
-          evidence rather than described by a model. A failed agent stops the
-          chain instead of passing bad output downstream.
+          The requirement is scored before anything is built, every generator is
+          followed by a check that must pass, and the release verdict is computed
+          from run evidence rather than described by a model. A failed stage stops
+          the chain instead of passing weak output downstream.
         </p>
       </section>
 
@@ -257,10 +247,10 @@ export default async function Home() {
                       />
                       <span className="min-w-0 flex-1">
                         <span className="block text-[13.5px] font-medium leading-tight text-[var(--ink)]">
-                          {t.name}
+                          {engineName(catalog, t.id)}
                         </span>
                         <span className="mt-0.5 block truncate text-[11.5px] leading-tight text-[var(--ink-faint)]">
-                          {t.description}
+                          {engineDescription(catalog, t.id)}
                         </span>
                       </span>
                       <Icon

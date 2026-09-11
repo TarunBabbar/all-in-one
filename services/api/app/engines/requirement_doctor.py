@@ -1,13 +1,24 @@
-"""Requirement Doctor engine (E2).
+"""Requirement Check engine (E2).
 
-Pattern source: Khan Bilal's AI Requirement Doctor — diagnose requirement
-quality with a 0-100 score and severity-tagged findings, let the user confirm
-fixes, then produce an enhanced, testable rewrite. The Gap Analyzer pattern
-is applied: the score is RECOMPUTED in local deterministic code, never trusted
-to the model's arithmetic.
+Pattern source: Khan Bilal's AI Requirement Doctor — score requirement quality
+0-100 with severity-tagged findings, let the user confirm fixes, then produce an
+enhanced, testable rewrite. The Gap Analyzer pattern applies: the score is
+RECOMPUTED in local deterministic code, never trusted to the model's arithmetic.
+
+This is a lint pass over the requirement, not a diagnosis — the display name
+says so. Two matching rules matter and both were once wrong:
+
+  - markers match on WORD BOUNDARIES. A substring test made "support" fire on
+    "supports", "some" on "something", "fast" on "breakfast" — vague-word
+    detection that reported words the requirement never used.
+  - an explicit "Acceptance Criteria" section IS an acceptance signal. The rule
+    only looked for should/must/shall/when/if, so a requirement listing seven
+    numbered criteria was scored "unverifiable" for lacking a modal verb.
 """
 
 from __future__ import annotations
+
+import re
 
 from ..core.llm import LLMRouter
 from ..pipeline.registry import Engine, register
@@ -15,9 +26,10 @@ from ..trust.schemas import ConfidenceScore
 
 # --- local deterministic quality rules (always run, no LLM) ---
 
+# Vague terms that make a requirement unverifiable. Matched case-insensitively
+# on word boundaries, so a marker only fires on the word itself.
 AMBIGUITY_MARKERS = [
     "etc",
-    "etc.",
     "and so on",
     "as soon as possible",
     "asap",
@@ -36,23 +48,28 @@ AMBIGUITY_MARKERS = [
     "support",
 ]
 
-CRITICAL_MISSING_MARKERS = [
-    "should",
-    "must",
-    "shall",
-    "when",
-    "if",
-    "error",
-    "invalid",
-    "login",
-    "user",
-    "data",
-    "save",
-    "submit",
-    "display",
-    "delete",
-    "update",
-]
+# An explicit criteria section is the strongest acceptance signal there is.
+_CRITERIA_HEADING = re.compile(
+    r"acceptance\s+(?:criteria|tests?|conditions?)|given\s*[:\-]|expected\s+behaviou?r",
+    re.IGNORECASE,
+)
+
+# Modal / conditional verbs that imply a testable condition.
+_CRITERIA_MODAL = re.compile(r"\b(should|must|shall|when|if)\b", re.IGNORECASE)
+
+
+def _ambiguity_hits(text: str) -> list[str]:
+    """Markers present as whole words, in list order.
+
+    A per-marker regex rather than one alternation so we can report which
+    marker matched, and so a longer phrase ("as soon as possible") is never
+    shadowed by a shorter one inside it.
+    """
+    return [
+        marker
+        for marker in AMBIGUITY_MARKERS
+        if re.search(rf"\b{re.escape(marker)}\b", text, re.IGNORECASE)
+    ]
 
 
 class QualityRule:
@@ -84,7 +101,6 @@ def run_deterministic_analysis(text: str) -> dict:
     Mirrors Gap Analyzer's 'score recomputed locally, never trusted to model'.
     """
     findings: list[dict] = []
-    lower = text.lower()
     words = _word_count(text)
 
     if words < 20:
@@ -106,31 +122,32 @@ def run_deterministic_analysis(text: str) -> dict:
             ).as_finding()
         )
 
-    # Acceptance-criteria signal: 'should/must/shall' or 'when/if' present.
-    has_criteria_signal = any(m in lower for m in ["should", "must", "shall", "when", "if"])
-    if not has_criteria_signal:
+    # Acceptance signal: an explicit criteria section, or a modal/conditional
+    # verb. The heading check matters — a requirement can state its criteria
+    # plainly without ever using "should" or "must".
+    if not (_CRITERIA_HEADING.search(text) or _CRITERIA_MODAL.search(text)):
         findings.append(
             QualityRule(
                 "REQ_NO_CRITERIA",
                 "high",
                 25,
-                "No acceptance-criteria signal found (should/must/when/if). "
-                "Acceptance is unverifiable.",
+                "No acceptance criteria found. Add a criteria section, or state "
+                "the conditions with should/must/when/if. Acceptance is unverifiable.",
             ).as_finding()
         )
 
-    for marker in AMBIGUITY_MARKERS:
-        if marker in lower:
-            findings.append(
-                QualityRule(
-                    "REQ_AMBIGUOUS",
-                    "medium",
-                    5,
-                    f"Ambiguous term present: '{marker}'. Define it precisely.",
-                ).as_finding()
-            )
+    for marker in _ambiguity_hits(text):
+        findings.append(
+            QualityRule(
+                "REQ_AMBIGUOUS",
+                "medium",
+                5,
+                f"Ambiguous term present: '{marker}'. Define it precisely.",
+            ).as_finding()
+        )
 
-    # Dedupe identical ambiguous markers (cap at 3 findings for one marker).
+    # A marker fires at most once per requirement, so a repeated vague word
+    # cannot stack penalties.
     seen = set()
     deduped: list[dict] = []
     for f in findings:
@@ -209,9 +226,9 @@ def register_engines() -> None:
     register(
         Engine(
             id="requirement-doctor",
-            name="Requirement Doctor",
-            description="Diagnose requirement quality with a score + findings, "
-            "then produce a confirmed, enhanced rewrite.",
+            name="Check Requirement",
+            description="Score requirement quality against deterministic rules "
+            "and list the findings, then produce an enhanced rewrite on request.",
             uses_llm=True,
             run=_engine_doctor,
         )

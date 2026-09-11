@@ -1,4 +1,4 @@
-"""Failure Triage engine (E6).
+"""Cluster Failures engine (E7).
 
 Absorbs: VERDICT (rules-first failure analysis + deterministic guard),
 TraceFix (fingerprint clustering collapsing N failures to few diagnoses,
@@ -144,9 +144,9 @@ def register_engines() -> None:
     register(
         Engine(
             id="failure-triage",
-            name="Failure Triage",
-            description="Cluster failures into root causes with evidence-cited "
-            "diagnoses and verification-guarded confidence.",
+            name="Cluster Failures",
+            description="Group failures by message similarity into a few root "
+            "causes with evidence-cited, guard-verified classifications.",
             uses_llm=True,
             run=_triage,
         )

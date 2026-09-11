@@ -124,8 +124,8 @@ def register_engines() -> None:
     register(
         Engine(
             id="api-testing",
-            name="API Tester",
-            description="Risk-scored endpoint analysis + test-gap ideas + "
+            name="Test API Endpoints",
+            description="Risk-scored endpoint analysis, test-gap ideas, and "
             "real request execution with a shareable report.",
             uses_llm=True,
             run=_api_testing,

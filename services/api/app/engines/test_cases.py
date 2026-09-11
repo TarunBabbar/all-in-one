@@ -1,4 +1,4 @@
-"""Test Case Generator engine (E3).
+"""Generate Test Cases engine (E4).
 
 This engine previously ignored the model entirely and returned four hardcoded
 templates for every requirement, which is why every run produced the same four
@@ -273,9 +273,9 @@ def register_engines() -> None:
     register(
         Engine(
             id="test-cases",
-            name="Test Case Generator",
-            description="Generate plan-conformant, traceable test cases "
-            "covering every criterion across positive, negative and edge.",
+            name="Generate Test Cases",
+            description="Generate plan-conformant, traceable cases covering "
+            "every criterion across positive, negative and edge.",
             uses_llm=True,
             run=_engine_testcases,
         )

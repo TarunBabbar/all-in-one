@@ -1,4 +1,4 @@
-"""Visual Regression engine (E7).
+"""Compare Screenshots engine (E8).
 
 Absorbs: Parity Scope (legacy-vs-new screenshot compare with categorized,
 severity-tagged findings + match score + Jira-ready write-up), Rohit's Visual
@@ -96,7 +96,7 @@ def register_engines() -> None:
     register(
         Engine(
             id="visual",
-            name="Visual Regression",
+            name="Compare Screenshots",
             description="Compare legacy vs new screenshots: severity-tagged "
             "findings, match score, and a ship/don't-ship verdict.",
             uses_llm=True,

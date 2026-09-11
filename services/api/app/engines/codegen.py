@@ -1,4 +1,4 @@
-"""Playwright CodeGen engine (E4) — deterministic POM framework builder.
+"""Generate Playwright Code engine (E5) — deterministic POM framework builder.
 
 Pattern (mirrors the QAE2E architecture): the LLM proposes coverage/test
 cases; the server renders a complete, runnable Playwright + TypeScript POM
@@ -714,9 +714,9 @@ def register_engines() -> None:
     register(
         Engine(
             id="codegen",
-            name="Playwright CodeGen",
-            description="Turn approved test cases into a runnable Playwright + "
-            "TypeScript POM framework (deterministic server-side build).",
+            name="Generate Playwright Code",
+            description="Build a runnable Playwright + TypeScript POM suite "
+            "from the approved cases (deterministic server-side build).",
             uses_llm=True,
             run=_codegen,
         )

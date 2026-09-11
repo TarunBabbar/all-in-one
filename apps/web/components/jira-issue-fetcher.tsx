@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { fetchJiraIssue, type JiraIssue } from "@/lib/api";
+import { Badge } from "@/components/badge";
 import { Icon } from "@/lib/icons";
 
 /**
@@ -37,9 +38,9 @@ export function JiraIssueFetcher({
   };
 
   return (
-    <div className="rounded-lg border border-[var(--line)] bg-[var(--bg-sunken)]/60 p-3">
-      <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--ink-faint)]">
-        <Icon name="intake" size={13} />
+    <div className="rounded-[var(--r-md)] border border-[var(--line)] bg-[var(--bg-sunken)] p-3">
+      <p className="field-label mb-2 flex items-center gap-1.5">
+        <Icon name="link" size={12} />
         Load from Jira
       </p>
       <div className="flex gap-2">
@@ -47,25 +48,38 @@ export function JiraIssueFetcher({
           value={key}
           onChange={(e) => setKey(e.target.value)}
           placeholder="PROJ-123"
-          className="w-40 rounded-md border bg-[var(--bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--accent)]"
+          aria-label="Jira issue key"
+          className="w-40 rounded-[var(--r-md)] border border-[var(--line-strong)] bg-[var(--bg)] px-2.5 py-1.5 text-[12.5px] text-[var(--ink)] outline-none transition-colors placeholder:text-[var(--ink-faint)] focus:border-[var(--accent)]"
+          style={{ fontFamily: "var(--font-mono)" }}
         />
         <button
           onClick={fetch}
           disabled={busy || !key.trim()}
-          className="press rounded-[var(--r-md)] bg-[var(--accent)] px-3 py-1.5 text-[12px] font-bold text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent-strong)] disabled:opacity-40"
+          className="press inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-md)] border border-[var(--line-strong)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--ink-soft)] transition-colors hover:border-[var(--accent)] hover:text-[var(--ink)] disabled:opacity-40"
         >
-          {busy ? "Fetching…" : "Fetch issue"}
+          <Icon name={busy ? "clock" : "search"} size={12} />
+          {busy ? "Fetching…" : "Fetch"}
         </button>
       </div>
       {issue && (
-        <p className="mt-2 text-xs text-[var(--ink-soft)]">
-          ✓ <span className="font-semibold">{issue.key}</span> · {issue.summary}{" "}
-          <span className="text-[var(--ink-faint)]">
-            ({issue.issue_type} · {issue.status})
+        <p className="qa-fade mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--ink-soft)]">
+          <Badge tone="ok" dot>
+            loaded
+          </Badge>
+          <span
+            className="font-semibold text-[var(--ink)]"
+            style={{ fontFamily: "var(--font-mono)" }}
+          >
+            {issue.key}
           </span>
+          <span className="truncate">{issue.summary}</span>
         </p>
       )}
-      {error && <p className="mt-2 text-xs text-[var(--bad)]">✗ {error}</p>}
+      {error && (
+        <p className="mt-2 text-[12px] leading-relaxed text-[var(--bad)]">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

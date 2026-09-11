@@ -1,4 +1,4 @@
-"""Agent Security engine (extended).
+"""Validate Tool Calls engine.
 
 Absorbs Nancy's AssertPilot: validate what an AI agent actually DID (tool
 calls, parameters) against the expected path; classify findings by severity
@@ -88,7 +88,7 @@ def register_engines() -> None:
     register(
         Engine(
             id="agent-security",
-            name="Agent Security",
+            name="Validate Tool Calls",
             description="Validate agent tool calls against the expected path; "
             "severity findings + trust score + attack lab.",
             uses_llm=False,

@@ -93,7 +93,7 @@ def register_engines() -> None:
     register(
         Engine(
             id="rag",
-            name="RAG Explorer",
+            name="Query Documents",
             description="Visible retrieve-then-generate over a document: "
             "browse/edit chunks, tune top-K, ask grounded questions.",
             uses_llm=True,

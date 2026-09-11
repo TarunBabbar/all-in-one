@@ -1,4 +1,4 @@
-"""Prompt Eval engine (extended).
+"""Evaluate Prompts engine.
 
 Absorbs Sujan's Prompt Testing: golden-set input->expected pairs, exact /
 contains / semantic-similarity grading, temperature sweep, and OWASP LLM Top
@@ -83,7 +83,7 @@ def register_engines() -> None:
     register(
         Engine(
             id="prompt-eval",
-            name="Prompt Eval",
+            name="Evaluate Prompts",
             description="Golden-set prompt testing + OWASP LLM Top 10 "
             "red-team attacks with success reporting.",
             uses_llm=True,

@@ -1,6 +1,8 @@
-// Per-engine tool form definitions. Each entry describes the input fields a
-// standalone tool workspace shows, mapped to the engine's expected payload.
-// The generic tools/[tool] page renders these + posts to /engines/{id}/run.
+// Per-engine input forms. Each entry describes the payload keys a standalone
+// tool workspace renders and posts to /engines/{id}/run.
+//
+// Titles and descriptions are NOT here — they come from the engine catalog
+// (GET /engines), so a tool is named in exactly one place.
 
 export interface ToolField {
   name: string; // payload key
@@ -13,112 +15,94 @@ export interface ToolField {
 
 export interface ToolFormDef {
   engine: string;
-  title: string;
-  description: string;
   fields: ToolField[];
 }
 
 export const TOOL_FORMS: Record<string, ToolFormDef> = {
   intake: {
     engine: "intake",
-    title: "Intake",
-    description: "Normalize a requirement from text, URL, Jira, or PRD into a structured artifact.",
     fields: [
-      { name: "text", label: "Raw requirement", type: "textarea", required: true },
-      { name: "source", label: "Source hint (text/url/jira/…)", type: "text", default: "text" },
+      { name: "text", label: "Requirement text", type: "textarea", required: true },
+      {
+        name: "source",
+        label: "Source",
+        type: "text",
+        default: "text",
+        placeholder: "text, jira, url, confluence, pdf",
+      },
     ],
   },
   "requirement-doctor": {
     engine: "requirement-doctor",
-    title: "Requirement Doctor",
-    description: "Score requirement quality, list findings, and (optionally) enhance with accepted fixes.",
-    fields: [
-      { name: "text", label: "Requirement", type: "textarea", required: true },
-    ],
+    fields: [{ name: "text", label: "Requirement text", type: "textarea", required: true }],
   },
   "test-cases": {
     engine: "test-cases",
-    title: "Test Case Generator",
-    description: "Turn a requirement into typed, prioritized, reviewable test cases.",
-    fields: [{ name: "text", label: "Requirement", type: "textarea", required: true }],
+    fields: [
+      { name: "text", label: "Requirement text", type: "textarea", required: true },
+      {
+        name: "plan",
+        label: "Test plan (JSON)",
+        type: "json",
+        placeholder: '{"criteria": [{"id": "AC-01", "text": "…"}]}',
+      },
+    ],
   },
   codegen: {
     engine: "codegen",
-    title: "Playwright CodeGen",
-    description: "Generate a grounded Playwright suite from approved test cases (JSON).",
     fields: [
       { name: "cases", label: "Test cases (JSON array)", type: "json" },
-      { name: "base_url", label: "Base URL", type: "text", default: "http://localhost:3000" },
+      { name: "base_url", label: "Base URL of the app under test", type: "text" },
     ],
   },
   "failure-triage": {
     engine: "failure-triage",
-    title: "Failure Triage",
-    description: "Cluster failures into root causes with evidence-cited, guard-verified diagnoses.",
-    fields: [
-      { name: "results", label: "Run results (JSON array)", type: "json" },
-    ],
+    fields: [{ name: "results", label: "Run results (JSON array)", type: "json" }],
   },
   visual: {
     engine: "visual",
-    title: "Visual Regression",
-    description: "Compare legacy vs new screenshots. Supply findings/diff metadata.",
     fields: [
-      { name: "diff_percent", label: "Diff percent (0-100)", type: "number" },
+      { name: "diff_percent", label: "Difference (0-100)", type: "number" },
       { name: "findings", label: "Findings (JSON array)", type: "json" },
     ],
   },
   a11y: {
     engine: "a11y",
-    title: "Accessibility",
-    description: "WCAG 2.0/2.1 scan of an HTML snippet.",
     fields: [{ name: "html", label: "HTML to scan", type: "textarea", required: true }],
   },
   "api-testing": {
     engine: "api-testing",
-    title: "API Tester",
-    description: "Risk-scored endpoint analysis + test ideas + optional live request.",
     fields: [
       { name: "method", label: "Method", type: "text", default: "GET" },
-      { name: "url", label: "URL", type: "text", required: true },
-      { name: "execute", label: "Execute live request", type: "checkbox" },
+      { name: "url", label: "Endpoint URL", type: "text", required: true },
+      { name: "execute", label: "Send a live request", type: "checkbox" },
     ],
   },
   etl: {
     engine: "etl",
-    title: "ETL / Data QA",
-    description: "Plain-English data rules -> runnable pytest against an injected schema.",
     fields: [
-      { name: "rules", label: "Rules (JSON array of strings)", type: "json" },
-      { name: "schema", label: "Schema (JSON)", type: "json" },
+      { name: "rules", label: "Data rules (JSON array of strings)", type: "json" },
+      { name: "schema", label: "Table schema (JSON)", type: "json" },
     ],
   },
   "release-gate": {
     engine: "release-gate",
-    title: "Release Gate",
-    description: "GO/NO-GO from run results against configurable criteria.",
     fields: [{ name: "results", label: "Run results (JSON array)", type: "json" }],
   },
   leakage: {
     engine: "leakage",
-    title: "Defect Leakage",
-    description: "Classify post-release defects and propose preventive tests.",
     fields: [{ name: "defects", label: "Defects (JSON array)", type: "json" }],
   },
   rag: {
     engine: "rag",
-    title: "RAG Explorer",
-    description: "Visible retrieve-then-generate over a document.",
     fields: [
       { name: "document", label: "Document text", type: "textarea", required: true },
       { name: "query", label: "Question", type: "text" },
-      { name: "top_k", label: "Top-K chunks", type: "number", default: "3" },
+      { name: "top_k", label: "Chunks to retrieve", type: "number", default: "3" },
     ],
   },
   "agent-security": {
     engine: "agent-security",
-    title: "Agent Security",
-    description: "Validate agent tool calls against the expected path.",
     fields: [
       { name: "expected_path", label: "Expected path (JSON)", type: "json" },
       { name: "actual_trace", label: "Actual trace (JSON)", type: "json" },
@@ -126,17 +110,13 @@ export const TOOL_FORMS: Record<string, ToolFormDef> = {
   },
   executor: {
     engine: "executor",
-    title: "Test Runner",
-    description: "Dispatch a generated suite (files JSON) to the sandboxed Playwright runner.",
     fields: [
-      { name: "files", label: "Suite files (JSON: [{name, content}])", type: "json" },
-      { name: "base_url", label: "Base URL", type: "text", default: "http://localhost:3000" },
+      { name: "files", label: "Suite files (JSON array of {name, content})", type: "json" },
+      { name: "base_url", label: "Base URL of the app under test", type: "text" },
     ],
   },
   "prompt-eval": {
     engine: "prompt-eval",
-    title: "Prompt Eval",
-    description: "Golden-set + red-team testing of prompts.",
     fields: [{ name: "rows", label: "Test rows (JSON array)", type: "json" }],
   },
 };

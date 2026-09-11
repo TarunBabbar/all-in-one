@@ -1,4 +1,4 @@
-"""Intake engine (E1) — normalize any source into a Requirement artifact.
+"""Normalize Requirement engine (E1) — any source into a Requirement artifact.
 
 Absorbs: TestCaseAI (Jira picker), Sankar (multi-source input), Paritosh
 (requirement/URL/PRD/Jira/Confluence), Gurpreet (design docs + screenshots),
@@ -62,9 +62,9 @@ def register_engines() -> None:
     register(
         Engine(
             id="intake",
-            name="Intake",
-            description="Normalize a requirement from text, URL, Jira, "
-            "Confluence, PRD, or PDF into a structured artifact.",
+            name="Normalize Requirement",
+            description="Clean and structure a raw requirement from text, URL, "
+            "Jira, Confluence, PRD, or PDF into a typed artifact.",
             uses_llm=False,
             run=_engine_intake,
         )

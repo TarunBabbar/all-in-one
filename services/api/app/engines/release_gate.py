@@ -170,9 +170,9 @@ def register_engines() -> None:
     register(
         Engine(
             id="release-gate",
-            name="Release Report",
+            name="Assess Release",
             description="GO/NO-GO from run evidence, self-heal outcomes and "
-            "eval-gate results, with a stated confidence and the manual-run queue.",
+            "check results, with a stated confidence and the manual-run queue.",
             uses_llm=False,
             run=_engine_release,
         )

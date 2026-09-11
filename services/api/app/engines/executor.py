@@ -1,4 +1,4 @@
-"""Sandboxed Executor engine (E5) with a self-healing run loop.
+"""Run Tests engine (E6) with a self-healing run loop.
 
 Absorbs: QA_AI_Solution (execute generated Playwright, collect evidence),
 OmnyGO (planner/driver/verifier), ETL Buddy (sandboxed execution), QAE2E
@@ -399,10 +399,10 @@ def register_engines() -> None:
     register(
         Engine(
             id="executor",
-            name="Test Runner",
-            description="Dispatch the generated suite to the sandboxed Playwright "
-            "runner, re-inspect the DOM on failure and heal locators, then report "
-            "per-test evidence plus anything that needs a manual run.",
+            name="Run Tests",
+            description="Execute the suite in the sandbox, re-inspect the DOM on "
+            "failure and heal broken locators, then report per-test evidence plus "
+            "anything that still needs a manual run.",
             uses_llm=True,
             uses_runner=True,
             run=_run_suite,

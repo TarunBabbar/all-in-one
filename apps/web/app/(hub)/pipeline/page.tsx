@@ -5,9 +5,13 @@ import { useSearchParams } from "next/navigation";
 
 import { ArtifactView } from "@/components/artifact-view";
 import { Badge, type BadgeTone } from "@/components/badge";
+import { useEngineCatalog } from "@/components/engine-catalog-provider";
 import { GitHubPusher } from "@/components/github-pusher";
 import { JiraIssueFetcher } from "@/components/jira-issue-fetcher";
 import { Icon, type IconName } from "@/lib/icons";
+import { engineDescription, engineName } from "@/lib/engine-catalog";
+import { CHAIN_STAGES, CHECK_STAGES, resumeTarget, stageDef } from "@/lib/stages";
+import type { StageId } from "@/lib/stages";
 import {
   createProject,
   getArtifact,
@@ -40,63 +44,18 @@ import {
  * trail still has forensic value, so it survives as a collapsed "Event trail".
  */
 
-// Matches services/api PIPELINE_STAGES order. Every generator is followed by
-// its deterministic eval gate, so a weak artifact stops the chain at the gate
-// that caught it rather than flowing into automation.
-const STAGES = [
-  "intake",
-  "doctor",
-  "test_plan",
-  "eval_plan",
-  "test_cases",
-  "eval_cases",
-  "codegen",
-  "eval_code",
-  "run",
-  "triage",
-  "visual",
-  "release",
-] as const;
-type Stage = (typeof STAGES)[number];
+// Stage ids and engine wiring come from lib/stages; the labels come from the
+// engine catalog. Nothing here names a stage.
+type Stage = StageId;
+type ChainStage = StageId;
 
-// The auto-chain never executes optional stages (the API's SKIPPABLE_STAGES),
-// so `visual` is excluded from the chain, the totals and the progress bar.
-const CHAIN_STAGES = STAGES.filter((s) => s !== "visual");
-type ChainStage = (typeof CHAIN_STAGES)[number];
-
-// Eval gates are deterministic scoring stages: they render as a metric table
-// rather than a document, so the row list stays readable at this length.
-const EVAL_STAGES = new Set<Stage>(["eval_plan", "eval_cases", "eval_code"]);
-
-/**
- * Resuming a failed gate must regenerate the artifact it checked, not re-run
- * the gate. Re-running the check would score identical input and reach the
- * identical verdict.
- */
-const GATE_SOURCE: Partial<Record<Stage, ChainStage>> = {
-  eval_plan: "test_plan",
-  eval_cases: "test_cases",
-  eval_code: "codegen",
-};
-
-function resumeTarget(stage: ChainStage): ChainStage {
-  return GATE_SOURCE[stage] ?? stage;
+/** The engine behind a stage, used to look its name up in the catalog. */
+function engineFor(stage: string): string {
+  return stageDef(stage)?.engine ?? stage;
 }
 
-const LABELS: Record<Stage, { name: string; icon: IconName; desc: string }> = {
-  intake: { name: "Intake", icon: "intake", desc: "Normalize the requirement" },
-  doctor: { name: "Doctor", icon: "doctor", desc: "Quality score + findings" },
-  test_plan: { name: "Test Plan", icon: "plan", desc: "Criteria + category matrix" },
-  eval_plan: { name: "Plan Eval", icon: "gate", desc: "Coverage + grounding metrics" },
-  test_cases: { name: "Test Cases", icon: "cases", desc: "Traceable, prioritized cases" },
-  eval_cases: { name: "Case Eval", icon: "gate", desc: "Conformance + traceability" },
-  codegen: { name: "CodeGen", icon: "codegen", desc: "Playwright POM suite" },
-  eval_code: { name: "Code Eval", icon: "gate", desc: "Coverage + locator grounding" },
-  run: { name: "Run", icon: "runner", desc: "Execute, heal, retry" },
-  triage: { name: "Triage", icon: "triage", desc: "Cluster root causes" },
-  visual: { name: "Visual", icon: "visual", desc: "Regression check (optional)" },
-  release: { name: "Release", icon: "release", desc: "GO / NO-GO + confidence" },
-};
+/** Stage ids in execution order — what the tracker and the run list iterate. */
+const CHAIN_IDS: ChainStage[] = CHAIN_STAGES.map((s) => s.stage);
 
 // Editable inputs exposed per agent (mirrors OVERRIDABLE_INPUTS on the API).
 // Placeholders are filled from the env-backed server defaults when available.
@@ -108,7 +67,7 @@ interface FieldDef {
   envDefaultKey?: "base_url" | "runner_url";
 }
 const STAGE_FIELDS: Partial<Record<Stage, FieldDef[]>> = {
-  intake: [{ key: "source", label: "Source hint", placeholder: "text | url | jira | github | confluence | pdf" }],
+  intake: [{ key: "source", label: "Source", placeholder: "text | url | jira | github | confluence | pdf" }],
   codegen: [
     { key: "base_url", label: "Base URL for the app under test", type: "url", envDefaultKey: "base_url" },
   ],
@@ -167,8 +126,14 @@ function stageSummary(stage: Stage, payload: Record<string, unknown> | null | un
         return wc ? `${wc} words normalized` : "Requirement captured";
       }
       case "doctor": {
-        const d = payload.diagnosis as { quality_score?: number } | undefined;
-        return d?.quality_score != null ? `Score ${d.quality_score}/100` : "Diagnosis ready";
+        const d = payload.diagnosis as
+          | { quality_score?: number; findings?: unknown[] }
+          | undefined;
+        if (d?.quality_score == null) return "Check complete";
+        // The findings count is the useful half of this: a bare score is a
+        // number with no action attached.
+        const n = d.findings?.length ?? 0;
+        return `Score ${d.quality_score}/100 · ${n} finding${n === 1 ? "" : "s"}`;
       }
       case "test_plan": {
         const total = (payload.summary as { total_criteria?: number } | undefined)?.total_criteria;
@@ -420,12 +385,12 @@ function PipelineBody({ initialProjectId }: { initialProjectId: string | null })
     }
   };
 
-  const started = CHAIN_STAGES.some((s) => stageState(s) !== "not_started");
-  const doneCount = CHAIN_STAGES.filter((s) => DONE.has(stageState(s))).length;
-  const blockedStage = CHAIN_STAGES.find((s) => stageState(s) === "blocked") ?? null;
+  const started = CHAIN_IDS.some((s) => stageState(s) !== "not_started");
+  const doneCount = CHAIN_IDS.filter((s) => DONE.has(stageState(s))).length;
+  const blockedStage = CHAIN_IDS.find((s) => stageState(s) === "blocked") ?? null;
   const appUrl = String(status?.inputs?.app_url ?? "");
-  const progress = Math.round((doneCount / CHAIN_STAGES.length) * 100);
-  const phase = running ? "running" : blockedStage ? "failed" : doneCount === CHAIN_STAGES.length ? "complete" : started ? "paused" : "idle";
+  const progress = Math.round((doneCount / CHAIN_IDS.length) * 100);
+  const phase = running ? "running" : blockedStage ? "failed" : doneCount === CHAIN_IDS.length ? "complete" : started ? "paused" : "idle";
 
   return (
     <div className="mx-auto max-w-[900px]">
@@ -462,7 +427,7 @@ function PipelineBody({ initialProjectId }: { initialProjectId: string | null })
           />
 
           <StageTracker
-            stages={CHAIN_STAGES}
+            stages={CHAIN_IDS}
             stageState={stageState}
             doneCount={doneCount}
             progress={progress}
@@ -660,6 +625,7 @@ function StageTracker({
   busy: boolean;
   onCancel: () => void;
 }) {
+  const catalog = useEngineCatalog();
   return (
     <div className="mb-6 rounded-[var(--r-lg)] border border-[var(--line)] bg-[var(--bg-elev)] px-5 pb-4 pt-5">
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
@@ -698,7 +664,7 @@ function StageTracker({
           return (
             <span
               key={s}
-              title={`${LABELS[s].name} — ${state.replace("_", " ")}`}
+              title={`${engineName(catalog, engineFor(s))} — ${state.replace("_", " ")}`}
               className={`h-1.5 flex-1 rounded-[3px] ${
                 done
                   ? "bg-[var(--ok)]"
@@ -730,12 +696,12 @@ function StageTracker({
         {stages.map((s, i) => (
           <span
             key={s}
-            className={`flex-1 text-center text-[10px] text-[var(--ink-faint)] ${
+            className={`flex-1 text-center text-[10px] leading-tight text-[var(--ink-faint)] ${
               i === 0 ? "text-left" : i === stages.length - 1 ? "text-right" : ""
             }`}
             style={{ fontFamily: "var(--font-mono)" }}
           >
-            {LABELS[s].name}
+            {engineName(catalog, engineFor(s))}
           </span>
         ))}
       </div>
@@ -893,7 +859,7 @@ function RunList({
   defaults?: { base_url?: string; runner_url?: string };
   artifactCacheKey: string | null;
 }) {
-  const completed = CHAIN_STAGES.filter((s) => DONE.has(stageState(s))).length;
+  const completed = CHAIN_IDS.filter((s) => DONE.has(stageState(s))).length;
 
   if (!started) {
     return (
@@ -919,19 +885,19 @@ function RunList({
           className="text-[12px] tabular-nums text-[var(--ink-faint)]"
           style={{ fontFamily: "var(--font-mono)" }}
         >
-          {completed} / {CHAIN_STAGES.length} complete
+          {completed} / {CHAIN_IDS.length} complete
         </span>
       </div>
 
       {/* Each agent is its own card on a shared vertical spine, so the list
           reads as one chain rather than a stack of unrelated panels. */}
       <ol>
-        {CHAIN_STAGES.map((s, i) => (
+        {CHAIN_IDS.map((s, i) => (
           <RunRow
             key={`${artifactCacheKey}-${s}`}
             stage={s}
             ordinal={i + 1}
-            isLast={i === CHAIN_STAGES.length - 1}
+            isLast={i === CHAIN_IDS.length - 1}
             state={stageState(s)}
             startedAt={stages[s]?.started_at}
             updatedAt={stages[s]?.updated_at}
@@ -991,6 +957,7 @@ function RunRow({
   const [expanded, setExpanded] = useState(false);
   const [artifactError, setArtifactError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const catalog = useEngineCatalog();
 
   const { label, tone } = rowVisual(state);
   const isDone = DONE.has(state);
@@ -1027,8 +994,11 @@ function RunRow({
     stage === "codegen" ||
     stage === "run";
   const fields = STAGE_FIELDS[stage] ?? [];
-  const isGate = EVAL_STAGES.has(stage);
-  const regenerateFrom = isGate ? LABELS[resumeTarget(stage)].name : "";
+  const isGate = CHECK_STAGES.has(stage);
+  const regenerateFrom = isGate
+    ? engineName(catalog, engineFor(resumeTarget(stage)))
+    : "";
+  const stageEngine = engineFor(stage);
 
   return (
     <li
@@ -1074,7 +1044,7 @@ function RunRow({
             }`}
             style={{ fontFamily: "var(--font-display)" }}
           >
-            {LABELS[stage].name}
+            {engineName(catalog, stageEngine)}
           </h3>
           <StatusPill tone={tone} label={label} />
           <span className="ml-auto">
@@ -1083,7 +1053,7 @@ function RunRow({
         </div>
 
         <p className="mb-2.5 text-[13px] leading-relaxed text-[var(--ink-soft)]">
-          {LABELS[stage].desc}
+          {engineDescription(catalog, stageEngine)}
         </p>
 
         <div className="flex flex-wrap items-center justify-between gap-3">

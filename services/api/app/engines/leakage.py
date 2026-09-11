@@ -115,7 +115,7 @@ def register_engines() -> None:
     register(
         Engine(
             id="leakage",
-            name="Defect Leakage",
+            name="Analyze Defect Leakage",
             description="Classify post-release defects as missed/not-missed "
             "and propose preventive tests.",
             uses_llm=True,

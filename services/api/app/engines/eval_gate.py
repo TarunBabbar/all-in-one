@@ -42,9 +42,20 @@ _REQUIRES: dict[str, tuple[str, ...]] = {
 }
 
 _TITLES: dict[str, str] = {
-    "eval-plan": "Plan Eval",
-    "eval-cases": "Case Eval",
-    "eval-code": "Code Eval",
+    "eval-plan": "Check Plan",
+    "eval-cases": "Check Cases",
+    "eval-code": "Check Code",
+}
+
+# Each gate says what it checks and against what. A shared description would
+# leave three stages reading identically in the pipeline.
+_DESCRIPTIONS: dict[str, str] = {
+    "eval-plan": "Score the test plan against the requirement: does it cover "
+    "every stated criterion without inventing scope?",
+    "eval-cases": "Score the cases against the plan: is every criterion covered, "
+    "and does every case trace back to one?",
+    "eval-code": "Score the generated suite: does every automatable case have a "
+    "spec, and are the locators grounded?",
 }
 
 
@@ -87,8 +98,7 @@ def register_engines() -> None:
             Engine(
                 id=engine_id,
                 name=title,
-                description="Deterministically score the preceding artifact "
-                "with DeepEval metrics and block the chain on failure.",
+                description=_DESCRIPTIONS[engine_id],
                 uses_llm=False,
                 run=_make_runner(engine_id),
             )

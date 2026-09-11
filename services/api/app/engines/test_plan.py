@@ -88,7 +88,7 @@ def register_engines() -> None:
     register(
         Engine(
             id="test-plan",
-            name="Test Plan",
+            name="Plan Tests",
             description="Turn a requirement into testable criteria with a "
             "category matrix the case generator must conform to.",
             uses_llm=True,
