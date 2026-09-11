@@ -21,11 +21,35 @@ ATTACK_LAB = [
 ]
 
 
+def _as_calls(value: object) -> list[dict]:
+    """Normalize a tool-call list to dicts.
+
+    A caller writing the "expected path" as the tool names in order
+    (`["search", "open_result"]`) is the natural reading of that field, and it
+    used to crash with `'str' object has no attribute 'get'`. Both shapes are
+    now accepted: a bare string becomes `{"tool": name}`.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[dict] = []
+    for item in value:
+        if isinstance(item, str):
+            if item.strip():
+                out.append({"tool": item.strip()})
+        elif isinstance(item, dict):
+            if item.get("tool"):
+                out.append(item)
+    return out
+
+
 def validate_trace(expected: list[dict], actual: list[dict]) -> dict:
     """Compare the expected tool-call path to what the agent actually did."""
     findings = []
-    expected_map = {e.get("tool"): e for e in expected}
-    actual_tools = [a.get("tool") for a in actual]
+    expected = _as_calls(expected)
+    actual = _as_calls(actual)
+
+    expected_map = {e["tool"]: e for e in expected}
+    actual_tools = [a["tool"] for a in actual]
 
     for tool, exp in expected_map.items():
         if tool not in actual_tools:
@@ -41,7 +65,7 @@ def validate_trace(expected: list[dict], actual: list[dict]) -> dict:
             continue
         act = next(a for a in actual if a.get("tool") == tool)
         for key, val in (exp.get("params") or {}).items():
-            if act.get("params", {}).get(key) != val:
+            if (act.get("params") or {}).get(key) != val:
                 findings.append(
                     {
                         "tool": tool,
@@ -49,18 +73,18 @@ def validate_trace(expected: list[dict], actual: list[dict]) -> dict:
                         "severity": "critical",
                         "category": "param_mismatch",
                         "message": f"Tool '{tool}' param '{key}' = "
-                        f"{act.get('params', {}).get(key)!r}, expected {val!r}.",
+                        f"{(act.get('params') or {}).get(key)!r}, expected {val!r}.",
                     }
                 )
     # Unexpected tool calls not in the expected path.
     for a in actual:
-        if a.get("tool") not in expected_map:
+        if a["tool"] not in expected_map:
             findings.append(
                 {
-                    "tool": a.get("tool"),
+                    "tool": a["tool"],
                     "severity": "high",
                     "category": "unexpected_tool_call",
-                    "message": f"Agent called unexpected tool '{a.get('tool')}'.",
+                    "message": f"Agent called unexpected tool '{a['tool']}'.",
                 }
             )
     trust = 100 - sum(

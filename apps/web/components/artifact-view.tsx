@@ -4,10 +4,13 @@
  *
  * Engine payloads are JSON — that is a storage/API format, not UI. This
  * component detects what kind of artifact it is looking at (release decision,
- * doctor diagnosis, test cases, run results, triage clusters, generated POM
- * framework, intake requirement…) and renders it readably. Unknown shapes get
- * a generic summary. Every view keeps a collapsible "Raw JSON" accordion so no
- * information is lost.
+ * requirement check, test plan, cases, run results, failure clusters, generated
+ * framework, check report…) and renders it readably.
+ *
+ * No view exposes the raw payload. An artefact is either understood (it gets a
+ * purpose-built view) or it is not (it gets the generic recursive view, which
+ * still renders every value). The JSON itself stays available over the API at
+ * GET /artifacts/{id} if anything needs to read it programmatically.
  */
 
 import { useState, type ReactNode } from "react";
@@ -50,35 +53,6 @@ function Chip({ tone = "neutral", children }: { tone?: Tone; children: ReactNode
     >
       {children}
     </span>
-  );
-}
-
-/**
- * The raw payload is a fallback, not the point of the view. Serializing it on
- * every render is wasted work (these payloads get large, and the pipeline
- * re-renders on every poll), so the JSON is produced only once opened.
- */
-function RawJson({ payload }: { payload: Unknown }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <details
-      className="mt-4 overflow-hidden rounded-[var(--r-md)] border border-[var(--line)] bg-[var(--bg-inset)]"
-      onToggle={(e) => setOpen(e.currentTarget.open)}
-    >
-      <summary className="flex cursor-pointer select-none items-center gap-1.5 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.06em] text-[var(--ink-faint)] transition-colors hover:text-[var(--ink-soft)]">
-        <Icon
-          name="arrow"
-          size={12}
-          className="chev transition-transform duration-200"
-        />
-        Raw JSON
-      </summary>
-      {open && (
-        <pre className="qa-fade max-h-80 overflow-auto border-t border-[var(--line)] p-3 font-mono text-[11px] leading-relaxed text-[var(--ink-soft)]">
-          {JSON.stringify(payload, null, 2)}
-        </pre>
-      )}
-    </details>
   );
 }
 
@@ -166,7 +140,6 @@ function RequirementView({ p }: { p: Unknown }) {
         {asNum(p.word_count) != null && <Stat label="words" value={asNum(p.word_count) ?? 0} />}
         {asNum(p.char_count) != null && <Stat label="chars" value={asNum(p.char_count) ?? 0} />}
       </div>
-      <RawJson payload={p} />
     </div>
   );
 }
@@ -222,7 +195,6 @@ function DoctorView({ p }: { p: Unknown }) {
           <TextBlock text={enhanced} maxH="56" />
         </Section>
       )}
-      <RawJson payload={p} />
     </div>
   );
 }
@@ -304,7 +276,6 @@ function CasesView({ p }: { p: Unknown }) {
           })}
         </ul>
       </Section>
-      <RawJson payload={p} />
     </div>
   );
 }
@@ -374,7 +345,6 @@ function RunResultsView({ p }: { p: Unknown }) {
         </Section>
       )}
       <SelfHealSection p={p} />
-      <RawJson payload={p} />
     </div>
   );
 }
@@ -450,7 +420,6 @@ function EvalReportView({ p }: { p: Unknown }) {
           })}
         </ul>
       </Section>
-      <RawJson payload={p} />
     </div>
   );
 }
@@ -521,7 +490,6 @@ function PlanView({ p }: { p: Unknown }) {
           </ul>
         </Section>
       )}
-      <RawJson payload={p} />
     </div>
   );
 }
@@ -681,7 +649,6 @@ function TriageView({ p }: { p: Unknown }) {
           })}
         </ul>
       </Section>
-      <RawJson payload={p} />
     </div>
   );
 }
@@ -786,7 +753,6 @@ function CodegenView({ p }: { p: Unknown }) {
             ))}
         </div>
       </Section>
-      <RawJson payload={p} />
     </div>
   );
 }
@@ -938,75 +904,176 @@ function ReleaseView({ p }: { p: Unknown }) {
           </ul>
         </Section>
       )}
-      <RawJson payload={p} />
+    </div>
+  );
+}
+
+/**
+ * Fallback renderer for an artifact shape we have no purpose-built view for.
+ *
+ * It recurses: scalars become labelled rows, lists become sections, and nested
+ * objects become sub-sections rather than a bare list of key names. That
+ * matters because this is the only view an unrecognised artifact gets — if it
+ * only named the keys, the values underneath would be unreachable now that the
+ * raw payload is no longer rendered.
+ *
+ * Depth is bounded so a deeply nested payload cannot produce an unreadable
+ * tower; past the limit a nested object is summarised by its field count.
+ */
+const MAX_DEPTH = 3;
+
+function label(key: string): string {
+  return key.replace(/[_-]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+}
+
+function ScalarValue({ v }: { v: unknown }) {
+  if (v == null) return <span className="italic text-[var(--ink-faint)]">empty</span>;
+  if (typeof v === "boolean")
+    return <span className={v ? "text-[var(--ok)]" : "text-[var(--ink-faint)]"}>{v ? "yes" : "no"}</span>;
+  if (typeof v === "number") return <span className="tabular-nums">{String(v)}</span>;
+  return <span className="break-words">{String(v)}</span>;
+}
+
+function ValueRows({ data, depth }: { data: Unknown; depth: number }) {
+  const entries = Object.entries(data);
+  const scalars = entries.filter(
+    ([, v]) => v == null || ["string", "number", "boolean"].includes(typeof v),
+  );
+  const lists = entries.filter((e): e is [string, unknown[]] => Array.isArray(e[1]));
+  const objects = entries.filter(
+    (e): e is [string, Unknown] =>
+      e[1] != null && typeof e[1] === "object" && !Array.isArray(e[1]),
+  );
+
+  return (
+    <div className="space-y-3">
+      {scalars.length > 0 && (
+        <dl className="grid grid-cols-[minmax(120px,auto)_1fr] gap-x-4 gap-y-1">
+          {scalars.map(([k, v]) => (
+            <div key={k} className="col-span-2 grid grid-cols-subgrid items-baseline">
+              <dt className="truncate text-[10.5px] font-medium text-[var(--ink-faint)]">
+                {label(k)}
+              </dt>
+              <dd className="min-w-0 text-[12.5px] text-[var(--ink-soft)]">
+                <ScalarValue v={v} />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {lists.map(([k, items]) => (
+        <Section key={k} title={`${label(k)} (${items.length})`}>
+          {items.length === 0 ? (
+            <p className="text-[12px] text-[var(--ink-faint)]">Nothing listed.</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {items.slice(0, 12).map((item, i) => {
+                if (item == null || typeof item !== "object") {
+                  return (
+                    <li
+                      key={i}
+                      className="rounded-[var(--r-sm)] border border-[var(--line)] bg-[var(--bg)] px-2.5 py-1.5 text-[12.5px] text-[var(--ink-soft)]"
+                    >
+                      <ScalarValue v={item} />
+                    </li>
+                  );
+                }
+                if (Array.isArray(item)) {
+                  return (
+                    <li key={i} className="text-[12px] text-[var(--ink-soft)]">
+                      {item.map((x) => String(x)).join(", ")}
+                    </li>
+                  );
+                }
+                const o = item as Unknown;
+                const heading = [
+                  o.title,
+                  o.name,
+                  o.message,
+                  o.subject,
+                  o.status,
+                  o.classification,
+                ].find((x): x is string => typeof x === "string" && x.length > 0);
+                return (
+                  <li
+                    key={i}
+                    className="rounded-[var(--r-sm)] border border-[var(--line)] bg-[var(--bg)] px-2.5 py-2"
+                  >
+                    {heading && (
+                      <p className="mb-1 text-[12.5px] font-medium text-[var(--ink)]">
+                        {String(heading)}
+                        {asStr(o.status) && asStr(o.status) !== heading && (
+                          <Chip tone="neutral">{asStr(o.status)}</Chip>
+                        )}
+                      </p>
+                    )}
+                    {asStr(o.error) && (
+                      <p className="mb-1 text-[11.5px] text-[var(--bad)]">{asStr(o.error)}</p>
+                    )}
+                    <ValueRows data={o} depth={depth + 1} />
+                  </li>
+                );
+              })}
+              {items.length > 12 && (
+                <li className="text-[11.5px] text-[var(--ink-faint)]">
+                  and {items.length - 12} more
+                </li>
+              )}
+            </ul>
+          )}
+        </Section>
+      ))}
+
+      {objects.map(([k, o]) => {
+        const keys = Object.keys(o);
+        if (keys.length === 0) return null;
+        if (depth >= MAX_DEPTH) {
+          // At the limit we condense rather than hide: a bare field count would
+          // make the values underneath unreachable, and there is no longer a
+          // raw payload to fall back on. Deeper branches are still counted.
+          const leaves = Object.entries(o).filter(
+            ([, v]) => v == null || typeof v !== "object",
+          );
+          const deeper = keys.length - leaves.length;
+          return (
+            <div key={k} className="text-[11.5px] text-[var(--ink-faint)]">
+              <span className="font-medium">{label(k)}</span>
+              {leaves.length > 0 && (
+                <>
+                  {" · "}
+                  {leaves.map(([lk, lv], i) => (
+                    <span key={lk}>
+                      {i > 0 && ", "}
+                      {label(lk)}: <ScalarValue v={lv} />
+                    </span>
+                  ))}
+                </>
+              )}
+              {deeper > 0 && (
+                <span className="text-[var(--ink-faint)]">
+                  {leaves.length > 0 ? ", " : " "}
+                  {deeper} nested field{deeper === 1 ? "" : "s"}
+                </span>
+              )}
+            </div>
+          );
+        }
+        return (
+          <Section key={k} title={label(k)}>
+            <ValueRows data={o} depth={depth + 1} />
+          </Section>
+        );
+      })}
     </div>
   );
 }
 
 function GenericView({ p }: { p: Unknown }) {
-  const scalars = Object.entries(p).filter(
-    ([, v]) => v == null || (["string", "number", "boolean"].includes(typeof v) && !(typeof v === "string" && v.length > 400)),
-  );
-  // Narrowed via type predicates: filtering alone leaves the entries typed as
-  // unknown, so the length checks and item mapping below would not compile.
-  const arrays = Object.entries(p).filter(
-    (entry): entry is [string, unknown[]] => Array.isArray(entry[1]),
-  );
-  const objects = Object.entries(p).filter(
-    (entry): entry is [string, Unknown] =>
-      entry[1] != null && typeof entry[1] === "object" && !Array.isArray(entry[1]),
-  );
-  return (
-    <div>
-      {scalars.length > 0 && (
-        <dl className="space-y-1.5">
-          {scalars.map(([k, v]) => (
-            <div key={k} className="flex gap-3 rounded-lg border border-[var(--line)]/60 bg-[var(--bg)] px-3 py-1.5 text-sm">
-              <dt className="w-32 shrink-0 font-mono text-[11px] font-bold uppercase tracking-wide text-[var(--ink-faint)]">{k}</dt>
-              <dd className="min-w-0 break-words text-[var(--ink-soft)]">{typeof v === "boolean" ? String(v) : typeof v === "number" ? String(v) : v == null ? <i className="text-[var(--ink-faint)]">null</i> : (v as string)}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      {arrays.map(([k, v]) => (
-        <Section key={k} title={`${k} (${v.length})`}>
-          {v.length === 0 ? (
-            <p className="text-sm text-[var(--ink-faint)]">Empty list.</p>
-          ) : (
-            <ul className="space-y-1">
-              {v.slice(0, 12).map((item, i) => {
-                if (typeof item === "string") return <li key={i} className="rounded bg-[var(--bg-sunken)]/40 px-2 py-1 text-xs text-[var(--ink-soft)]">{item}</li>;
-                if (item && typeof item === "object") {
-                  const o = item as Unknown;
-                  const label = [o.title, o.name, o.message, o.status, o.classification].find((x) => typeof x === "string" && x);
-                  return (
-                    <li key={i} className="rounded-lg border border-[var(--line)]/60 bg-[var(--bg)] px-2.5 py-1.5 text-xs text-[var(--ink-soft)]">
-                      {label ? asStr(label) : `item ${i + 1}`}
-                      {asStr(o.error) && <span className="text-[var(--bad)]"> — {asStr(o.error)}</span>}
-                    </li>
-                  );
-                }
-                return <li key={i} className="text-xs text-[var(--ink-faint)]">item {i + 1}</li>;
-              })}
-              {v.length > 12 && <li className="text-[11px] font-bold text-[var(--ink-faint)]">+ {v.length - 12} more…</li>}
-            </ul>
-          )}
-        </Section>
-      ))}
-      {objects.length > 0 && (
-        <Section title="Details">
-          <p className="text-xs text-[var(--ink-soft)]">
-            {objects.map(([k, o]) => (
-              <span key={k} className="mr-3">
-                <span className="font-mono font-bold text-[var(--accent-strong)]">{k}</span> · {Object.keys(o).join(", ")}
-              </span>
-            ))}
-          </p>
-        </Section>
-      )}
-      <RawJson payload={p} />
-    </div>
-  );
+  if (Object.keys(p).length === 0) {
+    return <p className="text-[12.5px] text-[var(--ink-faint)]">No output.</p>;
+  }
+  return <ValueRows data={p} depth={0} />;
 }
 
 /* ------------------------------- dispatch -------------------------------- */
